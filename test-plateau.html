@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test Plateau Échecs - Carré Parfait</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: white;
+      padding: 20px;
+      min-height: 100vh;
+    }
+    
+    h1 {
+      text-align: center;
+      color: #4a9eff;
+      margin-bottom: 30px;
+    }
+    
+    .test-results {
+      background: #16213e;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      border: 2px solid #4a9eff;
+    }
+    
+    .test-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px;
+      margin: 5px 0;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 6px;
+    }
+    
+    .test-label {
+      font-weight: 600;
+    }
+    
+    .test-value {
+      font-family: monospace;
+      color: #4a9eff;
+    }
+    
+    .pass {
+      color: #4CAF50;
+      font-weight: bold;
+    }
+    
+    .fail {
+      color: #e94560;
+      font-weight: bold;
+    }
+    
+    button {
+      background: #4a9eff;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      margin: 5px;
+    }
+    
+    button:hover {
+      background: #3a7edf;
+    }
+    
+    #visualTest {
+      margin-top: 20px;
+      text-align: center;
+    }
+    
+    .board-preview {
+      display: inline-block;
+      position: relative;
+      margin: 20px auto;
+    }
+    
+    .dimension-label {
+      position: absolute;
+      background: rgba(74, 158, 255, 0.9);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    
+    .width-label {
+      top: -30px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    
+    .height-label {
+      left: -60px;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+    
+    iframe {
+      border: 3px solid #4a9eff;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🧪 Test Plateau Échecs - Stabilité</h1>
+  
+  <div class="test-results">
+    <h2 style="color: #4a9eff; margin-bottom: 15px;">📊 Résultats des Tests</h2>
+    <div id="testResults"></div>
+    
+    <div style="margin-top: 20px; text-align: center;">
+      <button onclick="runTests()">🔄 Relancer les Tests</button>
+      <button onclick="location.href='index.html'">← Retour à l'App</button>
+    </div>
+  </div>
+  
+  <div id="visualTest">
+    <h2 style="color: #4a9eff; margin-bottom: 15px;">👁️ Test Visuel</h2>
+    <p style="margin-bottom: 10px;">Ouvrez l'app ci-dessous et vérifiez que le plateau est carré :</p>
+    <iframe src="index.html" width="100%" height="800" style="max-width: 900px;"></iframe>
+  </div>
+  
+  <script>
+    function runTests() {
+      const results = document.getElementById('testResults');
+      results.innerHTML = '<p style="color: #FFA726;">⏳ Tests en cours...</p>';
+      
+      // Attendre que l'iframe soit chargée
+      setTimeout(() => {
+        const iframe = document.querySelector('iframe');
+        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+        
+        const tests = [];
+        
+        // Test 1: Plateau existe
+        const board = iframeDoc.querySelector('.chess-board');
+        if (board) {
+          tests.push({
+            label: 'Plateau d\'échecs présent',
+            value: '✓',
+            pass: true
+          });
+          
+          // Test 2: Dimensions du plateau
+          const rect = board.getBoundingClientRect();
+          const width = rect.width;
+          const height = rect.height;
+          const ratio = width / height;
+          
+          tests.push({
+            label: 'Largeur plateau',
+            value: `${Math.round(width)}px`,
+            pass: width > 0
+          });
+          
+          tests.push({
+            label: 'Hauteur plateau',
+            value: `${Math.round(height)}px`,
+            pass: height > 0
+          });
+          
+          tests.push({
+            label: 'Ratio (largeur/hauteur)',
+            value: ratio.toFixed(3),
+            pass: Math.abs(ratio - 1.0) < 0.01
+          });
+          
+          // Test 3: Grid layout
+          const computedStyle = window.getComputedStyle(board);
+          const gridCols = computedStyle.gridTemplateColumns;
+          const gridRows = computedStyle.gridTemplateRows;
+          
+          tests.push({
+            label: 'Grid Columns',
+            value: gridCols ? 'Défini' : 'Non défini',
+            pass: !!gridCols
+          });
+          
+          tests.push({
+            label: 'Grid Rows',
+            value: gridRows ? 'Défini' : 'Non défini',
+            pass: !!gridRows
+          });
+          
+          // Test 4: Cases carrées
+          const squares = iframeDoc.querySelectorAll('.sq');
+          if (squares.length > 0) {
+            const firstSq = squares[0];
+            const sqRect = firstSq.getBoundingClientRect();
+            const sqRatio = sqRect.width / sqRect.height;
+            
+            tests.push({
+              label: 'Nombre de cases',
+              value: `${squares.length}`,
+              pass: squares.length === 64
+            });
+            
+            tests.push({
+              label: 'Case carrée (ratio)',
+              value: sqRatio.toFixed(3),
+              pass: Math.abs(sqRatio - 1.0) < 0.05
+            });
+            
+            // Vérifier toutes les cases
+            let allSquare = true;
+            squares.forEach(sq => {
+              const r = sq.getBoundingClientRect();
+              if (Math.abs(r.width - r.height) > 2) {
+                allSquare = false;
+              }
+            });
+            
+            tests.push({
+              label: 'Toutes les cases carrées',
+              value: allSquare ? '64/64' : 'Certaines déformées',
+              pass: allSquare
+            });
+          }
+          
+          // Test 5: Pièces présentes
+          const pieces = iframeDoc.querySelectorAll('.pc');
+          tests.push({
+            label: 'Pièces chargées',
+            value: `${pieces.length}`,
+            pass: pieces.length === 32
+          });
+          
+          // Test 6: Aspect-ratio CSS
+          const aspectRatio = computedStyle.aspectRatio;
+          tests.push({
+            label: 'Aspect-ratio CSS',
+            value: aspectRatio || 'Non supporté',
+            pass: aspectRatio === '1 / 1' || aspectRatio === '1'
+          });
+          
+        } else {
+          tests.push({
+            label: 'Plateau d\'échecs',
+            value: 'Non trouvé',
+            pass: false
+          });
+        }
+        
+        // Afficher les résultats
+        let html = '';
+        let passCount = 0;
+        let totalCount = tests.length;
+        
+        tests.forEach(test => {
+          if (test.pass) passCount++;
+          html += `
+            <div class="test-item">
+              <span class="test-label">${test.label}</span>
+              <span class="test-value ${test.pass ? 'pass' : 'fail'}">
+                ${test.value} ${test.pass ? '✓' : '✗'}
+              </span>
+            </div>
+          `;
+        });
+        
+        // Score final
+        const score = ((passCount / totalCount) * 100).toFixed(0);
+        const scoreClass = score >= 80 ? 'pass' : 'fail';
+        
+        html = `
+          <div class="test-item" style="background: rgba(74, 158, 255, 0.2); margin-bottom: 15px;">
+            <span class="test-label" style="font-size: 16px;">🎯 Score Global</span>
+            <span class="test-value ${scoreClass}" style="font-size: 18px;">
+              ${passCount}/${totalCount} (${score}%)
+            </span>
+          </div>
+        ` + html;
+        
+        results.innerHTML = html;
+        
+        // Message final
+        if (score >= 90) {
+          results.innerHTML += `
+            <div style="margin-top: 20px; padding: 15px; background: rgba(76, 175, 80, 0.2); border-radius: 8px; text-align: center;">
+              <strong style="color: #4CAF50; font-size: 18px;">
+                ✅ EXCELLENT ! Le plateau est parfaitement stable ! 🎉
+              </strong>
+            </div>
+          `;
+        } else if (score >= 70) {
+          results.innerHTML += `
+            <div style="margin-top: 20px; padding: 15px; background: rgba(255, 167, 38, 0.2); border-radius: 8px; text-align: center;">
+              <strong style="color: #FFA726; font-size: 18px;">
+                ⚠️ BON, mais quelques ajustements nécessaires
+              </strong>
+            </div>
+          `;
+        } else {
+          results.innerHTML += `
+            <div style="margin-top: 20px; padding: 15px; background: rgba(233, 69, 96, 0.2); border-radius: 8px; text-align: center;">
+              <strong style="color: #e94560; font-size: 18px;">
+                ❌ Problèmes détectés - Vérifier le CSS
+              </strong>
+            </div>
+          `;
+        }
+        
+      }, 1000);
+    }
+    
+    // Lancer les tests au chargement
+    window.addEventListener('load', () => {
+      setTimeout(runTests, 1500);
+    });
+    
+    // Relancer les tests au resize
+    window.addEventListener('resize', () => {
+      clearTimeout(window.resizeTimer);
+      window.resizeTimer = setTimeout(runTests, 500);
+    });
+  </script>
+</body>
+</html>

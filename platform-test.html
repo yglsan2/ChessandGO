@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Test Compatibilité Multiplateforme - Social Board</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: white;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    
+    h1 {
+      text-align: center;
+      color: #4a9eff;
+      margin-bottom: 30px;
+      font-size: 28px;
+    }
+    
+    .test-section {
+      background: #16213e;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+      border: 2px solid #0f3460;
+    }
+    
+    h2 {
+      color: #e94560;
+      margin-bottom: 15px;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    .info-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    
+    .info-item {
+      background: #0f3460;
+      padding: 12px;
+      border-radius: 8px;
+    }
+    
+    .info-label {
+      font-weight: bold;
+      color: #4a9eff;
+      font-size: 13px;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+    
+    .info-value {
+      color: #e0e0e0;
+      font-size: 14px;
+      word-break: break-word;
+    }
+    
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 12px;
+      margin-left: 10px;
+    }
+    
+    .status-ok {
+      background: #4CAF50;
+      color: white;
+    }
+    
+    .status-warn {
+      background: #FFA726;
+      color: white;
+    }
+    
+    .status-error {
+      background: #e94560;
+      color: white;
+    }
+    
+    .feature-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 10px;
+    }
+    
+    .feature-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      background: #0f3460;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    
+    .feature-icon {
+      font-size: 20px;
+    }
+    
+    .resolution-display {
+      text-align: center;
+      padding: 30px;
+      background: linear-gradient(135deg, #4a9eff 0%, #2a6ebf 100%);
+      border-radius: 12px;
+      margin: 20px 0;
+    }
+    
+    .resolution-display .big-text {
+      font-size: 48px;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+    
+    .resolution-display .small-text {
+      font-size: 18px;
+      opacity: 0.9;
+    }
+    
+    button {
+      background: #4a9eff;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    
+    button:hover {
+      background: #3a7edf;
+      transform: translateY(-2px);
+    }
+    
+    button:active {
+      transform: scale(0.95);
+    }
+    
+    .back-link {
+      display: block;
+      text-align: center;
+      color: #4a9eff;
+      text-decoration: none;
+      font-weight: bold;
+      padding: 15px;
+      background: #16213e;
+      border-radius: 8px;
+      margin-top: 30px;
+      font-size: 16px;
+    }
+    
+    .test-canvas {
+      border: 2px solid #4a9eff;
+      border-radius: 8px;
+      background: white;
+      display: block;
+      margin: 20px auto;
+      max-width: 100%;
+    }
+    
+    @media (max-width: 768px) {
+      body {
+        padding: 10px;
+      }
+      
+      h1 {
+        font-size: 22px;
+      }
+      
+      .info-grid {
+        grid-template-columns: 1fr;
+      }
+      
+      .resolution-display .big-text {
+        font-size: 32px;
+      }
+      
+      .feature-list {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🌐 Test Compatibilité Multiplateforme</h1>
+    
+    <!-- Résolution actuelle -->
+    <div class="resolution-display">
+      <div class="big-text" id="resolutionText">-</div>
+      <div class="small-text" id="deviceType">-</div>
+    </div>
+    
+    <!-- Plateforme détectée -->
+    <div class="test-section">
+      <h2>💻 Plateforme Détectée</h2>
+      <div class="info-grid">
+        <div class="info-item">
+          <div class="info-label">Système d'exploitation</div>
+          <div class="info-value" id="osName">-</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Navigateur</div>
+          <div class="info-value" id="browserName">-</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Type d'appareil</div>
+          <div class="info-value" id="deviceCategory">-</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Support tactile</div>
+          <div class="info-value" id="touchSupport">-</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Pixel Ratio</div>
+          <div class="info-value" id="pixelRatio">-</div>
+        </div>
+        <div class="info-item">
+          <div class="info-label">Orientation</div>
+          <div class="info-value" id="orientation">-</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Features supportées -->
+    <div class="test-section">
+      <h2>✅ Features Web Supportées</h2>
+      <div class="feature-list" id="featureList"></div>
+    </div>
+    
+    <!-- Test Canvas -->
+    <div class="test-section">
+      <h2>🎨 Test Canvas 2D</h2>
+      <canvas id="testCanvas" class="test-canvas" width="300" height="200"></canvas>
+      <div style="text-align: center; margin-top: 10px;">
+        <button id="btnTestCanvas">Tester le Canvas</button>
+      </div>
+    </div>
+    
+    <!-- Test Audio -->
+    <div class="test-section">
+      <h2>🔊 Test Web Audio API</h2>
+      <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
+        <button id="btnTestAudio1">Test Son 1 (440Hz)</button>
+        <button id="btnTestAudio2">Test Son 2 (523Hz)</button>
+        <button id="btnTestAudio3">Test Son 3 (659Hz)</button>
+      </div>
+      <div id="audioStatus" style="text-align: center; margin-top: 15px; font-size: 14px;"></div>
+    </div>
+    
+    <!-- Test Vibration (mobile uniquement) -->
+    <div class="test-section" id="vibrationSection" style="display: none;">
+      <h2>📳 Test Vibration API</h2>
+      <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
+        <button id="btnVibrate1">Vibration Courte (10ms)</button>
+        <button id="btnVibrate2">Vibration Moyenne (50ms)</button>
+        <button id="btnVibrate3">Vibration Longue (100ms)</button>
+      </div>
+    </div>
+    
+    <!-- Test localStorage -->
+    <div class="test-section">
+      <h2>💾 Test localStorage</h2>
+      <div style="text-align: center;">
+        <button id="btnTestStorage">Tester localStorage</button>
+        <div id="storageStatus" style="margin-top: 10px; font-size: 14px;"></div>
+      </div>
+    </div>
+    
+    <!-- Recommandations -->
+    <div class="test-section">
+      <h2>💡 Recommandations pour votre plateforme</h2>
+      <div id="recommendations" style="font-size: 14px; line-height: 1.8;"></div>
+    </div>
+    
+    <a href="index.html" class="back-link">← Retour à l'application</a>
+  </div>
+  
+  <script>
+    // Détection de plateforme
+    const ua = navigator.userAgent;
+    
+    const platform = {
+      isWindows: /Win/.test(ua),
+      isMac: /Mac/.test(ua) && !/iPhone|iPad|iPod/.test(ua),
+      isLinux: /Linux/.test(ua) && !/Android/.test(ua),
+      isAndroid: /Android/.test(ua),
+      isiOS: /iPhone|iPad|iPod/.test(ua),
+      
+      isChrome: /Chrome/.test(ua) && !/Edg/.test(ua),
+      isFirefox: /Firefox/.test(ua),
+      isSafari: /Safari/.test(ua) && !/Chrome/.test(ua),
+      isEdge: /Edg/.test(ua),
+      
+      isMobile: 'ontouchstart' in window || navigator.maxTouchPoints > 0,
+      isTablet: false,
+      isDesktop: false
+    };
+    
+    // Déterminer type d'appareil
+    const width = window.innerWidth;
+    if (platform.isMobile && width >= 600 && width < 1024) {
+      platform.isTablet = true;
+    } else if (!platform.isMobile || width >= 1024) {
+      platform.isDesktop = true;
+    }
+    
+    // OS Name
+    let osName = 'Inconnu';
+    if (platform.isWindows) osName = 'Windows';
+    else if (platform.isMac) osName = 'macOS';
+    else if (platform.isLinux) osName = 'Linux';
+    else if (platform.isAndroid) osName = 'Android';
+    else if (platform.isiOS) osName = 'iOS / iPadOS';
+    
+    // Browser Name
+    let browserName = 'Inconnu';
+    if (platform.isChrome) browserName = 'Chrome';
+    else if (platform.isFirefox) browserName = 'Firefox';
+    else if (platform.isSafari) browserName = 'Safari';
+    else if (platform.isEdge) browserName = 'Edge';
+    
+    // Device Category
+    let deviceCategory = '';
+    if (platform.isDesktop) deviceCategory = '🖥️ Desktop / Laptop';
+    else if (platform.isTablet) deviceCategory = '📱 Tablette';
+    else if (platform.isMobile) deviceCategory = '📱 Smartphone';
+    
+    // Afficher les infos
+    document.getElementById('osName').textContent = osName;
+    document.getElementById('browserName').textContent = browserName;
+    document.getElementById('deviceCategory').textContent = deviceCategory;
+    document.getElementById('touchSupport').innerHTML = platform.isMobile 
+      ? '<span style="color: #4CAF50;">✅ OUI</span>' 
+      : '<span style="color: #999;">❌ NON (Souris uniquement)</span>';
+    document.getElementById('pixelRatio').textContent = window.devicePixelRatio + 'x';
+    
+    // Résolution
+    function updateResolution() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      document.getElementById('resolutionText').textContent = `${w} × ${h}`;
+      
+      let category = '';
+      if (w < 360) category = 'Très Petit Mobile';
+      else if (w < 600) category = 'Mobile';
+      else if (w < 768) category = 'Grande Phablette';
+      else if (w < 1024) category = 'Tablette';
+      else if (w < 1440) category = 'Laptop / Desktop';
+      else if (w < 1920) category = 'Large Desktop';
+      else category = 'Ultra-Wide / 4K';
+      
+      document.getElementById('deviceType').textContent = category;
+      
+      const orientation = w > h ? '🔄 Paysage' : '📱 Portrait';
+      document.getElementById('orientation').textContent = orientation;
+    }
+    
+    updateResolution();
+    window.addEventListener('resize', updateResolution);
+    
+    // Features
+    const features = [
+      { name: 'Canvas 2D', supported: !!document.createElement('canvas').getContext },
+      { name: 'Web Audio API', supported: !!(window.AudioContext || window.webkitAudioContext) },
+      { name: 'localStorage', supported: typeof Storage !== 'undefined' },
+      { name: 'Touch Events', supported: 'ontouchstart' in window },
+      { name: 'Vibration API', supported: 'vibrate' in navigator },
+      { name: 'Drag & Drop', supported: 'ondragstart' in document.createElement('div') },
+      { name: 'Web Workers', supported: typeof Worker !== 'undefined' },
+      { name: 'ES6 Modules', supported: 'noModule' in document.createElement('script') },
+      { name: 'Fetch API', supported: typeof fetch !== 'undefined' },
+      { name: 'Promise', supported: typeof Promise !== 'undefined' },
+      { name: 'Service Workers', supported: 'serviceWorker' in navigator },
+      { name: 'Web Share API', supported: 'share' in navigator }
+    ];
+    
+    const featureList = document.getElementById('featureList');
+    features.forEach(feature => {
+      const item = document.createElement('div');
+      item.className = 'feature-item';
+      item.innerHTML = `
+        <span class="feature-icon">${feature.supported ? '✅' : '❌'}</span>
+        <span>${feature.name}</span>
+      `;
+      featureList.appendChild(item);
+    });
+    
+    // Afficher section vibration si supportée
+    if ('vibrate' in navigator) {
+      document.getElementById('vibrationSection').style.display = 'block';
+    }
+    
+    // Test Canvas
+    document.getElementById('btnTestCanvas').addEventListener('click', () => {
+      const canvas = document.getElementById('testCanvas');
+      const ctx = canvas.getContext('2d');
+      
+      // Fond
+      ctx.fillStyle = '#4a9eff';
+      ctx.fillRect(0, 0, 300, 200);
+      
+      // Cercle
+      ctx.fillStyle = '#e94560';
+      ctx.beginPath();
+      ctx.arc(150, 100, 50, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Texte
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 24px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Canvas OK ✓', 150, 100);
+    });
+    
+    // Test Audio
+    let audioCtx = null;
+    
+    function playTone(freq, duration) {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      
+      oscillator.frequency.value = freq;
+      oscillator.type = 'sine';
+      
+      const now = audioCtx.currentTime;
+      gainNode.gain.setValueAtTime(0, now);
+      gainNode.gain.linearRampToValueAtTime(0.3, now + 0.01);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, now + duration);
+      
+      oscillator.start(now);
+      oscillator.stop(now + duration);
+      
+      document.getElementById('audioStatus').innerHTML = 
+        '<span style="color: #4CAF50;">✅ Audio fonctionne parfaitement !</span>';
+    }
+    
+    document.getElementById('btnTestAudio1').addEventListener('click', () => playTone(440, 0.15));
+    document.getElementById('btnTestAudio2').addEventListener('click', () => playTone(523, 0.15));
+    document.getElementById('btnTestAudio3').addEventListener('click', () => playTone(659, 0.15));
+    
+    // Test Vibration
+    if ('vibrate' in navigator) {
+      document.getElementById('btnVibrate1').addEventListener('click', () => {
+        navigator.vibrate(10);
+      });
+      document.getElementById('btnVibrate2').addEventListener('click', () => {
+        navigator.vibrate(50);
+      });
+      document.getElementById('btnVibrate3').addEventListener('click', () => {
+        navigator.vibrate(100);
+      });
+    }
+    
+    // Test localStorage
+    document.getElementById('btnTestStorage').addEventListener('click', () => {
+      try {
+        localStorage.setItem('test_platform', JSON.stringify({
+          os: osName,
+          browser: browserName,
+          timestamp: Date.now()
+        }));
+        const data = localStorage.getItem('test_platform');
+        const parsed = JSON.parse(data);
+        
+        document.getElementById('storageStatus').innerHTML = 
+          `<span style="color: #4CAF50;">✅ localStorage fonctionne !<br>` +
+          `Données sauvegardées : ${JSON.stringify(parsed, null, 2)}</span>`;
+        
+        localStorage.removeItem('test_platform');
+      } catch (e) {
+        document.getElementById('storageStatus').innerHTML = 
+          `<span style="color: #e94560;">❌ Erreur : ${e.message}</span>`;
+      }
+    });
+    
+    // Recommandations
+    const recommendations = document.getElementById('recommendations');
+    let recHtml = '';
+    
+    if (platform.isWindows) {
+      recHtml = `
+        <p><strong>✅ Windows détecté</strong></p>
+        <p>Navigateurs recommandés : Chrome, Edge, Firefox</p>
+        <p>Résolution optimale : 1920×1080 ou supérieure</p>
+        <p>Performance : Excellente sur tous les navigateurs modernes</p>
+      `;
+    } else if (platform.isMac) {
+      recHtml = `
+        <p><strong>✅ macOS détecté</strong></p>
+        <p>Navigateur recommandé : Safari (optimisé pour Retina)</p>
+        <p>Alternatives : Chrome, Firefox</p>
+        <p>Display : Rendering Retina automatique activé</p>
+        <p>Performance : Excellente, profitez de l'accélération GPU</p>
+      `;
+    } else if (platform.isLinux) {
+      recHtml = `
+        <p><strong>✅ Linux détecté</strong></p>
+        <p>Navigateurs recommandés : Firefox (défaut Ubuntu), Chrome/Chromium</p>
+        <p>Audio : PulseAudio/PipeWire supportés</p>
+        <p>Performance : Excellente sur tous les environnements (GNOME, KDE, i3...)</p>
+      `;
+    } else if (platform.isAndroid) {
+      recHtml = `
+        <p><strong>✅ Android détecté</strong></p>
+        <p>Navigateur recommandé : Chrome</p>
+        <p>Alternatives : Firefox, Samsung Internet</p>
+        <p>Features : Touch events natifs, vibrations, Web Audio</p>
+        <p>Conseil : Activez les vibrations dans les paramètres Android</p>
+      `;
+    } else if (platform.isiOS) {
+      recHtml = `
+        <p><strong>✅ iOS/iPadOS détecté</strong></p>
+        <p>Navigateur recommandé : Safari</p>
+        <p>Features : Touch events natifs, Taptic Engine, Web Audio</p>
+        <p>Display : Rendering optimisé pour Retina</p>
+        <p>Conseil : Ajoutez à l'écran d'accueil pour mode PWA</p>
+      `;
+    }
+    
+    recommendations.innerHTML = recHtml;
+    
+    // Auto-test canvas au chargement
+    setTimeout(() => {
+      document.getElementById('btnTestCanvas').click();
+    }, 500);
+  </script>
+</body>
+</html>

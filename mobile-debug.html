@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Mobile Debug - Social Board</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      padding: 15px;
+      background: #1a1a2e;
+      color: white;
+      line-height: 1.6;
+    }
+    
+    .debug-section {
+      background: #16213e;
+      border-radius: 12px;
+      padding: 15px;
+      margin-bottom: 15px;
+      border: 2px solid #0f3460;
+    }
+    
+    h1 {
+      font-size: 20px;
+      margin-bottom: 15px;
+      color: #4a9eff;
+    }
+    
+    h2 {
+      font-size: 16px;
+      margin-bottom: 10px;
+      color: #e94560;
+    }
+    
+    .status {
+      display: flex;
+      justify-content: space-between;
+      margin: 8px 0;
+      padding: 8px;
+      background: #0f3460;
+      border-radius: 6px;
+    }
+    
+    .status-label {
+      font-weight: bold;
+    }
+    
+    .status-value {
+      color: #4a9eff;
+    }
+    
+    .check {
+      color: #4CAF50;
+      font-weight: bold;
+    }
+    
+    .fail {
+      color: #e94560;
+      font-weight: bold;
+    }
+    
+    button {
+      background: #4a9eff;
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      width: 100%;
+      margin: 5px 0;
+      font-weight: bold;
+    }
+    
+    button:active {
+      transform: scale(0.95);
+      background: #3a7edf;
+    }
+    
+    .test-area {
+      background: #0f3460;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 10px 0;
+      text-align: center;
+      min-height: 100px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      touch-action: none;
+      user-select: none;
+    }
+    
+    .test-area.active {
+      background: #4a9eff;
+    }
+    
+    #touchLog {
+      background: #0f3460;
+      border-radius: 8px;
+      padding: 10px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-size: 12px;
+      font-family: monospace;
+    }
+    
+    .log-entry {
+      padding: 4px;
+      border-bottom: 1px solid #16213e;
+    }
+    
+    .back-link {
+      display: block;
+      text-align: center;
+      color: #4a9eff;
+      text-decoration: none;
+      font-weight: bold;
+      padding: 15px;
+      background: #16213e;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔬 Mobile Debug - Social Board</h1>
+  
+  <div class="debug-section">
+    <h2>📱 Informations Appareil</h2>
+    <div class="status">
+      <span class="status-label">Largeur d'écran:</span>
+      <span class="status-value" id="screenWidth">-</span>
+    </div>
+    <div class="status">
+      <span class="status-label">Hauteur d'écran:</span>
+      <span class="status-value" id="screenHeight">-</span>
+    </div>
+    <div class="status">
+      <span class="status-label">Pixel Ratio:</span>
+      <span class="status-value" id="pixelRatio">-</span>
+    </div>
+    <div class="status">
+      <span class="status-label">User Agent:</span>
+      <span class="status-value" id="userAgent">-</span>
+    </div>
+    <div class="status">
+      <span class="status-label">Orientation:</span>
+      <span class="status-value" id="orientation">-</span>
+    </div>
+    <div class="status">
+      <span class="status-label">Tactile:</span>
+      <span class="status-value" id="touchSupport">-</span>
+    </div>
+  </div>
+  
+  <div class="debug-section">
+    <h2>🎯 Test Tactile</h2>
+    <div class="test-area" id="touchTest">
+      Touchez ici pour tester
+    </div>
+    <div class="status">
+      <span class="status-label">Touches détectées:</span>
+      <span class="status-value" id="touchCount">0</span>
+    </div>
+    <div class="status">
+      <span class="status-label">Dernière position:</span>
+      <span class="status-value" id="lastTouch">-</span>
+    </div>
+  </div>
+  
+  <div class="debug-section">
+    <h2>🔊 Test Audio</h2>
+    <button id="testMove">Jouer son "Move"</button>
+    <button id="testCapture">Jouer son "Capture"</button>
+    <button id="testRefuse">Jouer son "Refuse"</button>
+    <div class="status">
+      <span class="status-label">Audio Context:</span>
+      <span class="status-value" id="audioStatus">-</span>
+    </div>
+  </div>
+  
+  <div class="debug-section">
+    <h2>📳 Test Vibrations</h2>
+    <button id="testVibLight">Vibration Légère (10ms)</button>
+    <button id="testVibMedium">Vibration Moyenne (15ms)</button>
+    <button id="testVibStrong">Vibration Forte (20ms)</button>
+    <button id="testVibPattern">Pattern (10,50,20,50,30)</button>
+    <div class="status">
+      <span class="status-label">Vibration API:</span>
+      <span class="status-value" id="vibrationStatus">-</span>
+    </div>
+  </div>
+  
+  <div class="debug-section">
+    <h2>💾 Test Storage</h2>
+    <button id="testStorage">Tester localStorage</button>
+    <div class="status">
+      <span class="status-label">localStorage:</span>
+      <span class="status-value" id="storageStatus">-</span>
+    </div>
+  </div>
+  
+  <div class="debug-section">
+    <h2>🎨 Test Canvas</h2>
+    <button id="testCanvas">Dessiner Canvas</button>
+    <canvas id="debugCanvas" width="200" height="200" style="width: 100%; max-width: 200px; border-radius: 8px; background: #0f3460; display: block; margin: 10px auto;"></canvas>
+    <div class="status">
+      <span class="status-label">Canvas 2D:</span>
+      <span class="status-value" id="canvasStatus">-</span>
+    </div>
+  </div>
+  
+  <div class="debug-section">
+    <h2>📋 Log Événements</h2>
+    <button id="clearLog">Effacer le log</button>
+    <div id="touchLog"></div>
+  </div>
+  
+  <a href="index.html" class="back-link">← Retour à l'application</a>
+  
+  <script>
+    // Informations appareil
+    document.getElementById('screenWidth').textContent = `${window.innerWidth}px`;
+    document.getElementById('screenHeight').textContent = `${window.innerHeight}px`;
+    document.getElementById('pixelRatio').textContent = window.devicePixelRatio;
+    document.getElementById('userAgent').textContent = navigator.userAgent.substring(0, 50) + '...';
+    document.getElementById('orientation').textContent = window.innerWidth > window.innerHeight ? 'Paysage' : 'Portrait';
+    
+    const touchSupported = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    document.getElementById('touchSupport').innerHTML = touchSupported 
+      ? '<span class="check">✅ OUI</span>' 
+      : '<span class="fail">❌ NON</span>';
+    
+    // Mise à jour orientation
+    window.addEventListener('resize', () => {
+      document.getElementById('screenWidth').textContent = `${window.innerWidth}px`;
+      document.getElementById('screenHeight').textContent = `${window.innerHeight}px`;
+      document.getElementById('orientation').textContent = window.innerWidth > window.innerHeight ? 'Paysage' : 'Portrait';
+    });
+    
+    // Test tactile
+    let touchCount = 0;
+    const touchTest = document.getElementById('touchTest');
+    const touchLog = document.getElementById('touchLog');
+    
+    function addLog(message) {
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      touchLog.insertBefore(entry, touchLog.firstChild);
+      
+      // Garder seulement les 20 derniers
+      while (touchLog.children.length > 20) {
+        touchLog.removeChild(touchLog.lastChild);
+      }
+    }
+    
+    touchTest.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      touchCount++;
+      touchTest.classList.add('active');
+      const touch = e.touches[0];
+      document.getElementById('touchCount').textContent = touchCount;
+      document.getElementById('lastTouch').textContent = `${Math.round(touch.clientX)}, ${Math.round(touch.clientY)}`;
+      addLog(`TouchStart: ${Math.round(touch.clientX)}, ${Math.round(touch.clientY)}`);
+    }, { passive: false });
+    
+    touchTest.addEventListener('touchend', () => {
+      touchTest.classList.remove('active');
+      addLog('TouchEnd');
+    });
+    
+    touchTest.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      const touch = e.touches[0];
+      document.getElementById('lastTouch').textContent = `${Math.round(touch.clientX)}, ${Math.round(touch.clientY)}`;
+    }, { passive: false });
+    
+    // Click également pour desktop
+    touchTest.addEventListener('click', () => {
+      touchCount++;
+      document.getElementById('touchCount').textContent = touchCount;
+      addLog('Click');
+    });
+    
+    document.getElementById('clearLog').addEventListener('click', () => {
+      touchLog.innerHTML = '';
+    });
+    
+    // Test audio
+    let audioCtx = null;
+    
+    function playTestTone(frequency, duration) {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      
+      oscillator.frequency.value = frequency;
+      oscillator.type = 'sine';
+      
+      const now = audioCtx.currentTime;
+      gainNode.gain.setValueAtTime(0, now);
+      gainNode.gain.linearRampToValueAtTime(0.3, now + 0.01);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, now + duration);
+      
+      oscillator.start(now);
+      oscillator.stop(now + duration);
+      
+      document.getElementById('audioStatus').innerHTML = '<span class="check">✅ OK</span>';
+      addLog(`Audio: ${frequency}Hz pendant ${duration}s`);
+    }
+    
+    document.getElementById('testMove').addEventListener('click', () => {
+      playTestTone(440, 0.1);
+    });
+    
+    document.getElementById('testCapture').addEventListener('click', () => {
+      playTestTone(523, 0.15);
+    });
+    
+    document.getElementById('testRefuse').addEventListener('click', () => {
+      playTestTone(220, 0.08);
+    });
+    
+    // Test storage
+    document.getElementById('testStorage').addEventListener('click', () => {
+      try {
+        localStorage.setItem('test_mobile', 'ok');
+        const value = localStorage.getItem('test_mobile');
+        localStorage.removeItem('test_mobile');
+        
+        if (value === 'ok') {
+          document.getElementById('storageStatus').innerHTML = '<span class="check">✅ OK</span>';
+          addLog('localStorage: OK');
+        } else {
+          throw new Error('Read failed');
+        }
+      } catch (e) {
+        document.getElementById('storageStatus').innerHTML = '<span class="fail">❌ ERREUR</span>';
+        addLog(`localStorage: ERREUR - ${e.message}`);
+      }
+    });
+    
+    // Test canvas
+    document.getElementById('testCanvas').addEventListener('click', () => {
+      try {
+        const canvas = document.getElementById('debugCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Fond
+        ctx.fillStyle = '#4a9eff';
+        ctx.fillRect(0, 0, 200, 200);
+        
+        // Cercle
+        ctx.fillStyle = '#e94560';
+        ctx.beginPath();
+        ctx.arc(100, 100, 50, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Texte
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('OK', 100, 110);
+        
+        document.getElementById('canvasStatus').innerHTML = '<span class="check">✅ OK</span>';
+        addLog('Canvas: OK');
+      } catch (e) {
+        document.getElementById('canvasStatus').innerHTML = '<span class="fail">❌ ERREUR</span>';
+        addLog(`Canvas: ERREUR - ${e.message}`);
+      }
+    });
+    
+    // Test vibrations
+    const vibrationSupported = 'vibrate' in navigator;
+    document.getElementById('vibrationStatus').innerHTML = vibrationSupported 
+      ? '<span class="check">✅ DISPONIBLE</span>' 
+      : '<span class="fail">❌ NON DISPONIBLE</span>';
+    
+    document.getElementById('testVibLight').addEventListener('click', () => {
+      if (navigator.vibrate) {
+        navigator.vibrate(10);
+        addLog('Vibration légère : 10ms');
+      } else {
+        addLog('Vibration non supportée');
+      }
+    });
+    
+    document.getElementById('testVibMedium').addEventListener('click', () => {
+      if (navigator.vibrate) {
+        navigator.vibrate(15);
+        addLog('Vibration moyenne : 15ms');
+      } else {
+        addLog('Vibration non supportée');
+      }
+    });
+    
+    document.getElementById('testVibStrong').addEventListener('click', () => {
+      if (navigator.vibrate) {
+        navigator.vibrate(20);
+        addLog('Vibration forte : 20ms');
+      } else {
+        addLog('Vibration non supportée');
+      }
+    });
+    
+    document.getElementById('testVibPattern').addEventListener('click', () => {
+      if (navigator.vibrate) {
+        navigator.vibrate([10, 50, 20, 50, 30]);
+        addLog('Pattern vibration : 10-50-20-50-30');
+      } else {
+        addLog('Vibration non supportée');
+      }
+    });
+    
+    // Auto-test au chargement
+    setTimeout(() => {
+      document.getElementById('testCanvas').click();
+    }, 500);
+  </script>
+</body>
+</html>

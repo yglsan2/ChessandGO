@@ -1,0 +1,759 @@
+/* ==========================================
+   STREAM OVERLAY CSS
+   Styles pour les overlays de streaming
+   ========================================== */
+
+/* Container principal */
+.stream-overlay-container {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 100;
+  display: none;
+}
+
+.stream-overlay-container.edit-mode {
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(74, 158, 255, 0.05) 0px,
+    rgba(74, 158, 255, 0.05) 1px,
+    transparent 1px,
+    transparent 50px
+  ),
+  repeating-linear-gradient(
+    90deg,
+    rgba(74, 158, 255, 0.05) 0px,
+    rgba(74, 158, 255, 0.05) 1px,
+    transparent 1px,
+    transparent 50px
+  );
+  pointer-events: all;
+}
+
+/* Widget de base */
+.stream-widget {
+  pointer-events: all;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  backdrop-filter: blur(10px);
+  transition: box-shadow 0.2s ease, transform 0.1s ease;
+}
+
+.stream-widget:hover {
+  box-shadow: 0 12px 48px rgba(74, 158, 255, 0.3);
+}
+
+.stream-widget.dragging {
+  cursor: move;
+  opacity: 0.8;
+  transform: scale(1.02);
+  z-index: 1000;
+}
+
+.stream-widget.resizing {
+  opacity: 0.8;
+}
+
+/* Header du widget */
+.widget-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border-bottom: 1px solid rgba(74, 158, 255, 0.3);
+  font-weight: 600;
+  font-size: 13px;
+  color: #4a9eff;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  user-select: none;
+}
+
+.widget-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.widget-close {
+  background: rgba(233, 69, 96, 0.2);
+  border: 1px solid #e94560;
+  color: #e94560;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: bold;
+  transition: all 0.2s ease;
+}
+
+.widget-close:hover {
+  background: #e94560;
+  color: white;
+}
+
+/* Corps du widget */
+.widget-body {
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #4a9eff rgba(26, 29, 46, 0.5);
+}
+
+.widget-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.widget-body::-webkit-scrollbar-track {
+  background: rgba(26, 29, 46, 0.5);
+}
+
+.widget-body::-webkit-scrollbar-thumb {
+  background: #4a9eff;
+  border-radius: 3px;
+}
+
+.widget-content {
+  padding: 12px;
+  color: #e0e0e0;
+  line-height: 1.6;
+}
+
+/* Resize handle */
+.widget-resize-handle {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  cursor: nwse-resize;
+  color: rgba(74, 158, 255, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  user-select: none;
+  transition: color 0.2s ease;
+}
+
+.widget-resize-handle:hover {
+  color: #4a9eff;
+}
+
+/* === WIDGETS SPÉCIFIQUES === */
+
+/* Player Info Widget */
+.player-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.player-row:last-child {
+  margin-bottom: 0;
+}
+
+.player-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  background: linear-gradient(135deg, #4a9eff 0%, #2a6ebf 100%);
+  box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4);
+}
+
+.player-details {
+  flex: 1;
+}
+
+.player-name {
+  font-weight: 700;
+  font-size: 16px;
+  color: white;
+  margin-bottom: 4px;
+}
+
+.player-rating {
+  font-size: 13px;
+  color: #4a9eff;
+  font-weight: 600;
+}
+
+/* Clock Widget */
+.clock-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.clock-display {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  border-left: 4px solid #4a9eff;
+}
+
+.clock-display.active {
+  background: linear-gradient(135deg, rgba(74, 158, 255, 0.2) 0%, rgba(42, 110, 191, 0.2) 100%);
+  border-left-color: #4CAF50;
+  box-shadow: 0 0 20px rgba(76, 175, 80, 0.3);
+}
+
+.clock-label {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.clock-time {
+  font-family: 'Courier New', monospace;
+  font-size: 20px;
+  font-weight: 700;
+  color: white;
+  letter-spacing: 1px;
+}
+
+/* Evaluation Widget */
+.eval-widget {
+  display: flex;
+  gap: 15px;
+}
+
+.eval-bar-container {
+  width: 40px;
+  height: 100%;
+  background: linear-gradient(180deg, #ffffff 50%, #000000 50%);
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5);
+}
+
+.eval-bar-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #000000;
+  transition: height 0.3s ease;
+}
+
+.eval-details {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+}
+
+.eval-score {
+  font-size: 24px;
+  font-weight: 700;
+  color: white;
+  text-align: center;
+}
+
+.eval-depth,
+.eval-best-move {
+  font-size: 12px;
+  color: #999;
+}
+
+/* Move List Widget */
+.move-list-scroll {
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+.move-item {
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+.move-item:hover {
+  background: rgba(74, 158, 255, 0.2);
+}
+
+.move-item.current {
+  background: linear-gradient(135deg, rgba(74, 158, 255, 0.3) 0%, rgba(42, 110, 191, 0.3) 100%);
+  border-left: 3px solid #4a9eff;
+  font-weight: 600;
+}
+
+/* Captured Pieces Widget */
+.captured-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.captured-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+}
+
+.captured-pieces {
+  flex: 1;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.captured-piece {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.material-diff {
+  font-weight: 700;
+  font-size: 14px;
+  color: #4CAF50;
+  min-width: 40px;
+  text-align: right;
+}
+
+.material-diff.negative {
+  color: #e94560;
+}
+
+/* Last Move Widget */
+.last-move-widget {
+  text-align: center;
+}
+
+.last-move-text {
+  font-size: 18px;
+  font-weight: 600;
+  color: white;
+  padding: 12px;
+  background: rgba(74, 158, 255, 0.2);
+  border-radius: 8px;
+  font-family: 'Courier New', monospace;
+}
+
+/* Stream Info Widget */
+.stream-info-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stream-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: white;
+  padding: 8px;
+  background: linear-gradient(135deg, rgba(233, 69, 96, 0.3) 0%, rgba(200, 50, 80, 0.3) 100%);
+  border-radius: 6px;
+  text-align: center;
+  animation: pulse-live 2s ease-in-out infinite;
+}
+
+@keyframes pulse-live {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.stream-viewers,
+.stream-duration {
+  font-size: 13px;
+  color: #999;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+}
+
+/* Webcam Widget */
+.webcam-widget {
+  position: relative;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#webcamVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.webcam-placeholder {
+  text-align: center;
+  color: #666;
+}
+
+/* Logo Widget */
+.logo-widget {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.logo-text {
+  font-size: 20px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #4a9eff 0%, #e94560 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.logo-subtitle {
+  font-size: 12px;
+  color: #999;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Chat Widget */
+.chat-widget {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  margin-bottom: 10px;
+}
+
+.chat-message {
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.chat-message strong {
+  color: #4a9eff;
+  margin-right: 6px;
+}
+
+.chat-input {
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid #4a9eff;
+  border-radius: 6px;
+  color: white;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.chat-input:focus {
+  outline: none;
+  border-color: #4a9eff;
+  box-shadow: 0 0 10px rgba(74, 158, 255, 0.3);
+}
+
+/* === PANNEAU DE CONFIGURATION === */
+
+.stream-config-panel {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.9);
+  backdrop-filter: blur(10px);
+  z-index: 2000;
+  display: none;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+}
+
+.config-panel-content {
+  background: linear-gradient(135deg, #1a1d2e 0%, #16213e 100%);
+  border-radius: 16px;
+  border: 2px solid #4a9eff;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+  max-width: 900px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 30px;
+}
+
+.config-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 30px;
+  padding-bottom: 20px;
+  border-bottom: 2px solid rgba(74, 158, 255, 0.3);
+}
+
+.config-panel-header h2 {
+  font-size: 24px;
+  color: white;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.config-section {
+  margin-bottom: 30px;
+}
+
+.config-section h3 {
+  font-size: 18px;
+  color: #4a9eff;
+  margin-bottom: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 15px;
+}
+
+.config-item {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 15px;
+  border-radius: 10px;
+  border: 1px solid rgba(74, 158, 255, 0.2);
+}
+
+.config-item label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: #e0e0e0;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.config-item input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: #4a9eff;
+}
+
+.config-item select,
+.config-item input[type="text"],
+.config-item input[type="number"] {
+  width: 100%;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(74, 158, 255, 0.3);
+  border-radius: 6px;
+  color: white;
+  font-size: 14px;
+  font-family: inherit;
+  margin-top: 8px;
+}
+
+.config-item select:focus,
+.config-item input:focus {
+  outline: none;
+  border-color: #4a9eff;
+  box-shadow: 0 0 10px rgba(74, 158, 255, 0.3);
+}
+
+/* Layout Presets */
+.layout-presets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.layout-preset-btn {
+  padding: 20px 15px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px solid rgba(74, 158, 255, 0.3);
+  border-radius: 10px;
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.layout-preset-btn:hover {
+  background: rgba(74, 158, 255, 0.2);
+  border-color: #4a9eff;
+  transform: translateY(-2px);
+}
+
+.layout-preset-btn.active {
+  background: linear-gradient(135deg, rgba(74, 158, 255, 0.3) 0%, rgba(42, 110, 191, 0.3) 100%);
+  border-color: #4a9eff;
+  box-shadow: 0 0 20px rgba(74, 158, 255, 0.4);
+}
+
+.layout-preset-icon {
+  font-size: 32px;
+}
+
+/* Actions */
+.config-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 30px;
+  padding-top: 20px;
+  border-top: 2px solid rgba(74, 158, 255, 0.3);
+  flex-wrap: wrap;
+}
+
+.config-actions button {
+  flex: 1;
+  min-width: 150px;
+  padding: 14px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #4a9eff 0%, #2a6ebf 100%);
+  color: white;
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(74, 158, 255, 0.4);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.btn-danger {
+  background: rgba(233, 69, 96, 0.2);
+  color: #e94560;
+  border: 1px solid #e94560;
+}
+
+.btn-danger:hover {
+  background: #e94560;
+  color: white;
+}
+
+/* === BARRE DE CONTRÔLE STREAM === */
+
+.stream-control-bar {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, rgba(26, 29, 46, 0.98) 0%, rgba(22, 33, 62, 0.98) 100%);
+  border: 2px solid #4a9eff;
+  border-radius: 16px;
+  padding: 15px 25px;
+  display: flex;
+  gap: 15px;
+  align-items: center;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(10px);
+  z-index: 150;
+}
+
+.stream-control-btn {
+  padding: 12px 20px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stream-control-btn:hover {
+  transform: translateY(-2px);
+}
+
+.btn-start-stream {
+  background: linear-gradient(135deg, #e94560 0%, #c83250 100%);
+  color: white;
+}
+
+.btn-stop-stream {
+  background: rgba(233, 69, 96, 0.2);
+  color: #e94560;
+  border: 1px solid #e94560;
+}
+
+.btn-config-stream {
+  background: rgba(74, 158, 255, 0.2);
+  color: #4a9eff;
+  border: 1px solid #4a9eff;
+}
+
+.btn-edit-overlay {
+  background: rgba(255, 165, 0, 0.2);
+  color: #FFA726;
+  border: 1px solid #FFA726;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .stream-control-bar {
+    flex-wrap: wrap;
+    bottom: 10px;
+    padding: 10px 15px;
+    gap: 8px;
+  }
+  
+  .stream-control-btn {
+    padding: 10px 14px;
+    font-size: 12px;
+  }
+  
+  .config-panel-content {
+    padding: 20px;
+  }
+  
+  .layout-presets {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

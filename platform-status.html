@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Status des Plateformes - Social Board</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1d2e;
+      color: #e0e0e0;
+      padding: 20px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    h1 {
+      color: #4a9eff;
+      text-align: center;
+    }
+    .status-card {
+      background: #252836;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 20px 0;
+      border-left: 4px solid #4a9eff;
+    }
+    .status-ok {
+      border-left-color: #28a745;
+    }
+    .status-warning {
+      border-left-color: #ffc107;
+    }
+    .status-error {
+      border-left-color: #dc3545;
+    }
+    .platform-name {
+      font-size: 24px;
+      font-weight: bold;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .status-badge {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: bold;
+    }
+    .badge-ok {
+      background: #28a745;
+      color: white;
+    }
+    .badge-warning {
+      background: #ffc107;
+      color: black;
+    }
+    .badge-error {
+      background: #dc3545;
+      color: white;
+    }
+    .details {
+      margin-top: 15px;
+      padding: 15px;
+      background: #1a1d2e;
+      border-radius: 8px;
+    }
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #333;
+    }
+    .detail-row:last-child {
+      border-bottom: none;
+    }
+    .btn {
+      display: inline-block;
+      padding: 10px 20px;
+      background: #4a9eff;
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      margin: 20px auto;
+      text-align: center;
+      display: block;
+      width: fit-content;
+    }
+    .btn:hover {
+      background: #357abd;
+    }
+  </style>
+</head>
+<body>
+  <h1>📊 Status des Plateformes Sociales</h1>
+  <p style="text-align:center;color:#aaa;">Cette page affiche le status de détection et d'intégration pour chaque plateforme.</p>
+
+  <div id="statusContainer">
+    <p style="text-align:center;">Chargement...</p>
+  </div>
+
+  <a href="index.html" class="btn">← Retour au jeu</a>
+
+  <script src="js/config.js"></script>
+  <script src="vendor/peerjs.min.js"></script>
+  <script src="js/platforms.js"></script>
+  <script>
+    const platforms = new Platforms();
+    platforms.init();
+
+    setTimeout(() => {
+      const status = platforms.getStatus();
+      const container = document.getElementById('statusContainer');
+      
+      const platformTests = [
+        {
+          name: 'Plateforme Actuelle',
+          detected: true,
+          platform: status.platform,
+          label: status.label,
+          initialized: status.initialized,
+          errors: status.errors
+        },
+        {
+          name: 'Canvas Support',
+          detected: !!document.createElement('canvas').getContext,
+          required: true
+        },
+        {
+          name: 'Local Storage',
+          detected: platforms.testLocalStorage(),
+          required: true
+        },
+        {
+          name: 'Web Audio API',
+          detected: !!(window.AudioContext || window.webkitAudioContext),
+          required: false
+        },
+        {
+          name: 'PeerJS',
+          detected: typeof Peer !== 'undefined',
+          required: true
+        },
+        {
+          name: 'SVG Support',
+          detected: !!document.createElementNS,
+          required: true
+        }
+      ];
+
+      let html = '';
+      
+      // Carte principale
+      const mainCard = `
+        <div class="status-card ${status.errors.length === 0 ? 'status-ok' : 'status-warning'}">
+          <div class="platform-name">
+            ${status.label}
+            <span class="status-badge ${status.errors.length === 0 ? 'badge-ok' : 'badge-warning'}">
+              ${status.errors.length === 0 ? '✓ OK' : '⚠ Avertissements'}
+            </span>
+          </div>
+          <div class="details">
+            <div class="detail-row">
+              <span>Plateforme détectée:</span>
+              <strong>${status.platform}</strong>
+            </div>
+            <div class="detail-row">
+              <span>Initialisée:</span>
+              <strong>${status.initialized ? '✓ Oui' : '✗ Non'}</strong>
+            </div>
+            <div class="detail-row">
+              <span>Erreurs:</span>
+              <strong>${status.errors.length === 0 ? '✓ Aucune' : status.errors.length}</strong>
+            </div>
+            ${status.errors.length > 0 ? `
+              <div class="detail-row">
+                <span>Détails:</span>
+                <span style="color:#ffc107;">${status.errors.join(', ')}</span>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
+      
+      html += mainCard;
+      
+      // Cartes de tests
+      platformTests.slice(1).forEach(test => {
+        const isOk = test.detected;
+        const severity = test.required && !isOk ? 'error' : (isOk ? 'ok' : 'warning');
+        
+        html += `
+          <div class="status-card status-${severity}">
+            <div class="platform-name">
+              ${test.name}
+              <span class="status-badge badge-${severity}">
+                ${isOk ? '✓ Supporté' : '✗ Non supporté'}
+              </span>
+            </div>
+            ${test.required && !isOk ? `
+              <p style="color:#dc3545;margin-top:10px;">
+                ⚠️ Cette fonctionnalité est requise pour le bon fonctionnement de l'application.
+              </p>
+            ` : ''}
+          </div>
+        `;
+      });
+      
+      container.innerHTML = html;
+    }, 500);
+  </script>
+</body>
+</html>
