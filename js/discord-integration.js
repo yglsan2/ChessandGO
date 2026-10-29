@@ -51,7 +51,13 @@ class DiscordIntegration {
     try {
       // Charger le SDK Discord si disponible
       if (typeof DiscordSDK !== 'undefined') {
-        this.discordSDK = new DiscordSDK(process.env.DISCORD_CLIENT_ID || 'YOUR_CLIENT_ID');
+        const clientId = (window.CONFIG && window.CONFIG.discord && window.CONFIG.discord.clientId) || '';
+        if (!clientId) {
+          console.warn('Discord clientId manquant (CONFIG / .env)');
+          this.enableDiscordSimulation();
+          return;
+        }
+        this.discordSDK = new DiscordSDK(clientId);
         
         await this.discordSDK.ready();
         
@@ -573,18 +579,33 @@ class DiscordIntegration {
   // === UTILS ===
   
   getStreamURL() {
+    if (window.Broadcast && typeof Broadcast.watchUrl === 'function') {
+      const net = typeof window.__sbGetNet === 'function' ? window.__sbGetNet() : null;
+      return Broadcast.watchUrl({
+        room: window.__sbShortRoomCode || (net && net.roomCode),
+        host: net && net.role === 'host' ? net.id : null,
+        token: net && net.roomToken
+      });
+    }
     const url = new URL(window.location.href);
-    url.searchParams.set('stream', this.streamKey);
-    url.searchParams.set('mode', 'spectator');
+    if (this.streamKey) {
+      url.searchParams.set('stream', this.streamKey);
+      url.searchParams.set('mode', 'spectator');
+    }
+    url.searchParams.set('broadcast', '1');
+    url.searchParams.set('observe', '1');
     return url.toString();
   }
   
   copyStreamURL() {
+    if (window.Broadcast && Broadcast.copyWatchLink) {
+      Broadcast.copyWatchLink();
+      return;
+    }
     const url = this.getStreamURL();
-    
     navigator.clipboard.writeText(url).then(() => {
       console.log('📋 URL du stream copié !');
-      this.showNotificationOverlay('📋 Lien du stream copié dans le presse-papier !');
+      this.showNotificationOverlay('📋 Lien Watch / OBS copié !');
     }).catch(err => {
       console.error('Erreur copie URL:', err);
     });

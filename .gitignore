@@ -2,3 +2,8 @@
 Thumbs.db
 .env
 *.log
+node_modules/
+data/
+dist/
+.cache/
+

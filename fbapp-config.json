@@ -1,0 +1,10 @@
+{
+  "instant_games": {
+    "platform_version": "RICH_GAMEPLAY",
+    "orientation": "PORTRAIT",
+    "navigation_bar_style": "DEFAULT",
+    "custom_update_templates": {},
+    "match_player_supported": true,
+    "context_player_limit": 2
+  }
+}

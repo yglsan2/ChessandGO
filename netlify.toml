@@ -1,0 +1,17 @@
+[build]
+  publish = "."
+  command = "python tools/make-share-image.py || true"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+[[headers]]
+  for = "/api/*"
+  [headers.values]
+    Cache-Control = "no-store"
+
+# L’API salles nécessite un runtime Node (npm start).
+# Sur Netlify « static only », les invitations restent en ?host=&t= (PeerJS).

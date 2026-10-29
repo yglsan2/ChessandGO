@@ -19,7 +19,7 @@ class GameAnalysis {
   initStockfish() {
     if (this.worker || !this.engineAvailable()) return;
     try {
-      this.worker = new Worker("vendor/stockfish.js");
+      this.worker = new Worker(new URL("vendor/stockfish.js", document.baseURI).href);
     } catch (err) {
       this.worker = null;
       return;
@@ -168,25 +168,36 @@ class GameAnalysis {
     }
   }
 
-  analyzeGo(goGame) {
-    const analysis = goGame.analyze();
+  analyzeGo(goGame, opts) {
+    opts = opts || {};
+    const analysis = goGame.analyze(opts.deadMap ? { deadMap: opts.deadMap } : undefined);
     const black = analysis.jp[1];
     const white = analysis.jp[2];
     const lead = Math.abs(black - white);
     const winner = black === white ? "Égalité" : (black > white ? "Noir" : "Blanc");
     const details =
+      "— Comptage —\n\n" +
       "Règle japonaise\n" +
-      "Noir : " + black.toFixed(1) + "  (territoire " + analysis.terr[1] +
-      ", captures " + goGame.captures[1] + ", morts blancs " + analysis.dead[2] + ")\n" +
-      "Blanc : " + white.toFixed(1) + "  (territoire " + analysis.terr[2] +
-      ", captures " + goGame.captures[2] + ", morts noirs " + analysis.dead[1] +
+      "Noir : " + black.toFixed(1) +
+      "  (territoire " + analysis.terr[1] +
+      " = vide " + analysis.emptyTerr[1] + " + morts B " + analysis.dead[2] +
+      ", captures " + goGame.captures[1] +
+      ", prisonniers morts " + analysis.dead[2] + ")\n" +
+      "Blanc : " + white.toFixed(1) +
+      "  (territoire " + analysis.terr[2] +
+      " = vide " + analysis.emptyTerr[2] + " + morts N " + analysis.dead[1] +
+      ", captures " + goGame.captures[2] +
+      ", prisonniers morts " + analysis.dead[1] +
       ", komi " + goGame.komi + ")\n\n" +
-      "Règle chinoise\n" +
-      "Noir : " + analysis.ch[1].toFixed(1) + "   Blanc : " + analysis.ch[2].toFixed(1) + "\n\n" +
+      "Règle chinoise (aire)\n" +
+      "Noir : " + analysis.ch[1].toFixed(1) +
+      "   Blanc : " + analysis.ch[2].toFixed(1) + "\n\n" +
       (winner === "Égalité"
-        ? "Position nulle (écart 0)"
-        : "Avantage : " + winner + " de " + lead.toFixed(1) + " points") +
-      "\nDame : " + analysis.dame + "  ·  Pierres mortes : " + (analysis.dead[1] + analysis.dead[2]);
+        ? "Résultat : partie nulle"
+        : "Résultat JP : " + winner + " gagne de " + lead.toFixed(1) + " points") +
+      "\nDame : " + analysis.dame +
+      "  ·  Morts auto/manuel : N " + analysis.dead[1] + " / B " + analysis.dead[2] +
+      "\n\nAstuce : en mode comptage, cliquez un groupe pour le marquer mort/vivant.";
 
     return {
       score: {
@@ -205,6 +216,83 @@ class GameAnalysis {
       komi: goGame.komi,
       details: details,
       raw: analysis
+    };
+  }
+
+  /**
+   * Revue post-partie : score japonais estimé après chaque coup.
+   * (Heuristique Benson/territoire locale — pas un moteur NN comme KataGo.)
+   */
+  reviewGo(goGame, step) {
+    const total = goGame.moves.length;
+    const stride = Math.max(1, Number(step) || (total > 120 ? 2 : 1));
+    const points = [];
+    for (let i = 0; i <= total; i += stride) {
+      const clone = goGame.cloneAtMove(i);
+      const est = clone.estimate();
+      const last = i > 0 ? goGame.moves[i - 1] : null;
+      points.push({
+        ply: i,
+        black: est.black,
+        white: est.white,
+        lead: est.lead,
+        move: last
+          ? (last.pass ? "pass" : goGame.coord(last.x, last.y))
+          : "départ",
+        color: last ? last.color : 0
+      });
+    }
+    if (points.length && points[points.length - 1].ply !== total) {
+      const clone = goGame.cloneAtMove(total);
+      const est = clone.estimate();
+      points.push({
+        ply: total,
+        black: est.black,
+        white: est.white,
+        lead: est.lead,
+        move: "fin",
+        color: 0
+      });
+    }
+
+    const swings = [];
+    for (let i = 1; i < points.length; i++) {
+      const delta = points[i].lead - points[i - 1].lead;
+      if (Math.abs(delta) >= 4) {
+        swings.push({
+          ply: points[i].ply,
+          move: points[i].move,
+          delta: delta,
+          lead: points[i].lead
+        });
+      }
+    }
+    swings.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+    let text = "Revue Go (" + total + " coups)\n";
+    text += "Score final estimé N " + points[points.length - 1].black.toFixed(1) +
+      " / B " + points[points.length - 1].white.toFixed(1) + "\n\n";
+    if (swings.length) {
+      text += "Coups pivots (Δ ≥ 4 pts) :\n";
+      swings.slice(0, 8).forEach((s) => {
+        const sign = s.delta > 0 ? "+" : "";
+        text += "  #" + s.ply + " " + s.move + "  Δ" + sign + s.delta.toFixed(1) +
+          " → lead " + s.lead.toFixed(1) + "\n";
+      });
+    } else {
+      text += "Pas de bascule majeure détectée (≥ 4 pts).\n";
+    }
+    text += "\nAstuce : exportez le SGF pour une analyse KataGo / Lizzie externe.";
+
+    return {
+      points: points,
+      swings: swings.slice(0, 12),
+      details: text,
+      sgf: goGame.exportSgf({
+        pb: "Noir",
+        pw: "Blanc",
+        dt: new Date().toISOString().slice(0, 10)
+      })
     };
   }
 

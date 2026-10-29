@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Social Board — Discord Activity</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; connect-src 'self' wss: https: https://discord.com https://*.discord.com https://cdn.discordapp.com; font-src 'self' data: https://fonts.gstatic.com; frame-ancestors https://discord.com https://*.discord.com;" />
+  <link rel="stylesheet" href="../css/hub.css" />
+  <style>
+    body.hub-page { padding: 16px; }
+    .hub { padding-top: 12px; }
+    .hub-hero { margin-bottom: 24px; }
+    #status {
+      margin-top: 18px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(0,0,0,0.28);
+      color: var(--hub-muted);
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body class="hub-page">
+  <div class="hub">
+    <div class="hub-top">
+      <a class="hub-brand" href="../">
+        Social Board
+        <span>Activity Discord</span>
+      </a>
+      <div class="hub-top-links">
+        <a class="hub-link" href="./test.html">Mock Go</a>
+        <a class="hub-link" href="./test.html?game=chess">Mock Échecs</a>
+      </div>
+    </div>
+
+    <section class="hub-hero">
+      <h1>Choisissez le jeu</h1>
+      <p>1v1 dans le salon vocal · Teaching optionnel · audio Discord pour commenter.</p>
+    </section>
+
+    <section class="hub-games" aria-label="Choisir un jeu">
+      <article class="game-card go">
+        <div class="game-card-kicker">Go</div>
+        <h2>Go</h2>
+        <p>Goban, Teaching, byoyomi — idéal en Activity.</p>
+        <div class="game-card-actions">
+          <a class="primary" id="goLink" href="../go/?discord=1&amp;automatch=1&amp;g=go">Lancer le Go</a>
+          <a id="goTeach" href="../go/?discord=1&amp;automatch=1&amp;teach=1&amp;g=go">Teaching</a>
+        </div>
+      </article>
+      <article class="game-card chess">
+        <div class="game-card-kicker">Échecs</div>
+        <h2>Échecs</h2>
+        <p>1v1 couleurs fixes (hôte = Blancs) · Classroom · Broadcast.</p>
+        <div class="game-card-actions">
+          <a class="primary" id="chessLink" href="../chess/?discord=1&amp;automatch=1&amp;g=chess">Lancer les Échecs</a>
+          <a id="chessTeach" href="../chess/?discord=1&amp;automatch=1&amp;teach=1&amp;g=chess">Teaching</a>
+        </div>
+      </article>
+    </section>
+
+    <div id="status">Chargement Discord…</div>
+  </div>
+
+  <script src="../js/config.js"></script>
+  <script src="../vendor/discord-embedded-app-sdk.js"></script>
+  <script src="../js/discord-activity.js"></script>
+  <script src="../js/discord-launcher.js?v=1"></script>
+</body>
+</html>

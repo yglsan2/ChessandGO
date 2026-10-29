@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Test Discord Activity (mock) — Social Board</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss: https:; frame-src 'self';" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: Segoe UI, system-ui, sans-serif;
+      background: #0f1320; color: #e8eef8; min-height: 100vh;
+    }
+    header {
+      padding: 14px 18px; border-bottom: 1px solid #2a3350;
+      display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+      background: #161b2e;
+    }
+    h1 { margin: 0; font-size: 1.1rem; font-weight: 650; }
+    .hint { color: #9aa8c7; font-size: .9rem; flex: 1; min-width: 220px; }
+    button {
+      border: 0; border-radius: 10px; padding: .55rem .9rem;
+      background: #5865F2; color: #fff; font-weight: 600; cursor: pointer;
+    }
+    button.secondary { background: #2e7d32; }
+    button.ghost { background: #2a3350; }
+    button.on { outline: 2px solid #e8c547; }
+    .game-switch { display: flex; gap: 6px; }
+    .grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+      height: calc(100vh - 64px); padding: 8px;
+    }
+    .pane {
+      display: flex; flex-direction: column; border: 1px solid #2a3350;
+      border-radius: 12px; overflow: hidden; background: #121826;
+    }
+    .pane h2 {
+      margin: 0; padding: 8px 12px; font-size: .85rem;
+      background: #1a2238; border-bottom: 1px solid #2a3350;
+      display: flex; justify-content: space-between; gap: 8px;
+    }
+    .pane iframe { flex: 1; width: 100%; border: 0; background: #0b0f1a; }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; height: auto; }
+      .pane { min-height: 70vh; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Simulateur Discord — <span id="simGameLabel">Go</span></h1>
+    <p class="hint">1v1 mock (BroadcastChannel). A = hôte, B = invité après ~3 s. Choisissez le jeu puis jouez.</p>
+    <div class="game-switch">
+      <button type="button" data-sim-game="go" class="on">Go</button>
+      <button type="button" data-sim-game="chess">Échecs</button>
+    </div>
+    <button type="button" id="btnReload" class="ghost">Recharger</button>
+    <button type="button" id="btnOpenA" class="secondary">Ouvrir A</button>
+    <button type="button" id="btnOpenB">Ouvrir B</button>
+  </header>
+  <div class="grid">
+    <section class="pane">
+      <h2><span>Joueur A — Hôte</span><span id="statusA">…</span></h2>
+      <iframe id="frameA" title="Joueur A" allow="autoplay"></iframe>
+    </section>
+    <section class="pane">
+      <h2><span>Joueur B — Adversaire</span><span id="statusB">…</span></h2>
+      <iframe id="frameB" title="Joueur B" allow="autoplay"></iframe>
+    </section>
+  </div>
+  <script src="../js/discord-test-sim.js?v=1"></script>
+</body>
+</html>

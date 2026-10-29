@@ -757,3 +757,87 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ===== Broadcast / OBS clean mode ===== */
+body.broadcast-mode header,
+body.broadcast-mode .platforms,
+body.broadcast-mode #loginModal,
+body.broadcast-mode #platformIndicator,
+body.broadcast-mode #invitationModal,
+body.broadcast-mode #counterModal,
+body.broadcast-mode #streamConfigPanel,
+body.broadcast-mode .login-tabs {
+  display: none !important;
+}
+
+body.broadcast-mode .controls {
+  opacity: 0.15;
+  pointer-events: none;
+  max-height: 0;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+
+body.broadcast-mode.obs-mode .controls,
+body.broadcast-mode.obs-mode #discordControls,
+body.broadcast-mode.obs-mode #streamingBar,
+body.broadcast-mode.obs-mode #commentaryPanel,
+body.broadcast-mode.obs-mode #pairsPanel,
+body.broadcast-mode.obs-mode #chessTeachingPanel,
+body.broadcast-mode.obs-mode .teaching-panel,
+body.broadcast-mode.obs-mode #analysisPanel {
+  display: none !important;
+}
+
+body.broadcast-mode .board-container {
+  margin: 0 auto;
+  max-width: min(92vh, 920px);
+}
+
+body.broadcast-mode #status {
+  text-align: center;
+  font-size: 14px;
+  opacity: 0.85;
+}
+
+body.broadcast-transparent,
+body.broadcast-transparent html {
+  background: transparent !important;
+}
+
+body.broadcast-transparent {
+  background-color: rgba(0, 0, 0, 0) !important;
+}
+
+body.broadcast-transparent .board-container {
+  background: transparent;
+}
+
+body.broadcast-mode #streamOverlay {
+  display: block;
+}
+
+body.spectator-mode #btnResign,
+body.spectator-mode #btnNew,
+body.spectator-mode #btnPass,
+body.spectator-mode #btnChessDraw {
+  display: none !important;
+}
+
+.clock-display.active {
+  outline: 2px solid #4a9eff;
+  border-radius: 8px;
+}
+
+.broadcast-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0;
+}
+
+body.obs-mode .broadcast-toolbar {
+  display: none !important;
+}

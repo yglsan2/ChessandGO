@@ -104,7 +104,14 @@ class AuthSystem {
     return { success: true, user: this.currentUser };
   }
 
-  loginEmail(email, code) {
+  loginEmail() {
+    return {
+      success: false,
+      error: "La connexion par email n'est plus simulée. Utilisez un pseudo, ou Facebook / Discord / Telegram une fois configurés."
+    };
+  }
+
+  async requestEmailLogin(email) {
     if (!this.canAttemptLogin()) {
       return { success: false, error: "Trop de tentatives. Réessayez dans 15 minutes." };
     }
@@ -114,26 +121,33 @@ class AuthSystem {
       this.recordLoginFailure();
       return { success: false, error: "Email invalide" };
     }
-    const codeStr = String(code || '');
-    if (!/^[A-Za-z0-9]{4,10}$/.test(codeStr)) {
-      this.recordLoginFailure();
-      return { success: false, error: "Code invalide" };
+    try {
+      const res = await fetch("/api/auth/email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: cleanEmail })
+      });
+      if (res.status === 404) {
+        return {
+          success: false,
+          error: "Email non activé sur ce serveur. Jouez avec un pseudo, ou configurez OAuth (voir README)."
+        };
+      }
+      if (!res.ok) {
+        this.recordLoginFailure();
+        const data = await res.json().catch(() => ({}));
+        return { success: false, error: data.error || "Impossible d'envoyer le code" };
+      }
+      return {
+        success: true,
+        message: "Si un service mail est configuré, un code vient d'être envoyé."
+      };
+    } catch (_) {
+      return {
+        success: false,
+        error: "Pas de backend email. Utilisez un pseudo pour jouer tout de suite."
+      };
     }
-
-    const username = this.sanitizeName(cleanEmail.split('@')[0]);
-    this.currentUser = {
-      id: (SM && SM.generateSecureId('email_')) || ('email_' + Date.now()),
-      username: username || 'joueur',
-      emailHint: cleanEmail.slice(0, 2) + '***',
-      type: 'email',
-      avatar: this.generateAvatar(username || 'joueur'),
-      created: Date.now()
-    };
-
-    this.loginFailures = [];
-
-    this.saveUser();
-    return { success: true, user: this.currentUser };
   }
 
   loginSocial(platform, socialId, socialName) {

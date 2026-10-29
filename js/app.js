@@ -1,6 +1,5 @@
-import { Chess } from "../vendor/chess.min.js";
 
-(function() {
+(async function() {
   // Images SVG des pièces d'échecs
   const PIECES = {
     wp: "wP", wn: "wN", wb: "wB", wr: "wR", wq: "wQ", wk: "wK",
@@ -32,8 +31,8 @@ import { Chess } from "../vendor/chess.min.js";
   // État du jeu
   const state = {
     game: "chess",
-    chess: new Chess(),
-    go: new window.GoGame(19),
+    chess: null,
+    go: null,
     selected: null,
     lastMove: null,
     lastGoMove: null,
@@ -48,7 +47,8 @@ import { Chess } from "../vendor/chess.min.js";
     checksGiven: { w: 0, b: 0 },
     variantWinner: null,
     antiMisclickChess: true,
-    antiMisclickGo: true,
+    antiMisclickGo: false,
+    goPlaceMode: "direct", // direct | slip | confirm
     renchess: false,
     rengo: false,
     pairSeat: { w: 0, b: 0 },
@@ -60,18 +60,531 @@ import { Chess } from "../vendor/chess.min.js";
     pieceHint: { w: null, b: null },
     goHint: { w: null, b: null },
     analysisMove: null,
-    goAnalysis: null
+    goAnalysis: null,
+    scoringMode: false,
+    matchMeta: {
+      ranked: true,
+      rules: "japanese",
+      handicap: 0,
+      hostIsBlack: true,
+      scoringDone: { me: false, foe: false },
+      observe: false,
+      opponentId: "opponent"
+    }
   };
+
+  let goFeaturesApi = null;
 
   // Objets globaux
   const sounds = new window.BoardSounds();
   const net = new window.Net();
   const platforms = new window.Platforms();
   const analysis = new window.GameAnalysis();
-  analysis.initStockfish();
   const clock = new window.GameClock();
-  const auth = new window.AuthSystem();
+  const auth = window.authInstance || new window.AuthSystem();
+  window.authInstance = auth;
   const invitationSystem = new window.InvitationSystem(auth, net);
+  const rooms = window.RoomService
+    ? new window.RoomService()
+    : { create: async () => null, resolve: async () => null, ping: async () => false };
+  let shortRoomCode = null;
+  Object.defineProperty(window, "__sbShortRoomCode", {
+    get: () => shortRoomCode,
+    configurable: true
+  });
+
+  const mods = { chess: null, go: null };
+  const api = {};
+  let requestedGame = null;
+  let remoteProjects = [];
+
+  function renderChess() { if (mods.chess) return mods.chess.renderChess(); }
+  function updateChessStatus() { if (mods.chess) return mods.chess.updateChessStatus(); }
+  function updateVariantHud() { if (mods.chess) mods.chess.updateVariantHud(); }
+  function isChessVariantOver() { return mods.chess ? mods.chess.isChessVariantOver() : false; }
+  function applyChessVariantFromNet(data) { if (mods.chess) mods.chess.applyChessVariantFromNet(data); }
+  function applyRemoteChessFen(fen, opts) { return mods.chess ? mods.chess.applyRemoteChessFen(fen, opts) : { ok: false }; }
+  function applyVariantAfterMove(move) { if (mods.chess) mods.chess.applyVariantAfterMove(move); }
+  function applyChecksFromNet(checks) { if (mods.chess) mods.chess.applyChecksFromNet(checks); }
+  function startNewChess(opts) { if (mods.chess) mods.chess.startNewChess(opts); }
+  function serializeChessState() { return mods.chess ? mods.chess.serializeChessState() : null; }
+  function loadChessState(snap) { return mods.chess ? mods.chess.loadChessState(snap) : false; }
+
+  /** Hôte = Blancs par défaut (Discord / online). */
+  function assignChessColors(asHost) {
+    state.hostColor = "w";
+    state.color = asHost ? "w" : "b";
+    if (state.chessBoardFlipped == null) {
+      state.chessBoardFlipped = state.color === "b";
+    }
+  }
+
+  function sendChessStateSync() {
+    if (!net.connected() || !mods.chess || !window.MatchProtocol) return;
+    const hostC = state.hostColor || "w";
+    const guestC = hostC === "b" ? "w" : "b";
+    // yourColor = couleur du destinataire (l'autre peer)
+    const peerColor = net.role === "host" ? guestC : hostC;
+    net.send(MatchProtocol.chessStateSyncPayload(serializeChessState(), clock, {
+      hostColor: hostC,
+      yourColor: peerColor
+    }));
+  }
+
+  /** Après auth peer : couleurs + sync plateau (hôte) ou demande (invité). */
+  function onPeerAuthenticated() {
+    configureClockAuthority();
+    if (net.role === "observer") {
+      document.body.classList.add("spectator-mode");
+      setStatus("Mode spectateur — lecture seule", "ok");
+      if (state.game === "chess") net.send({ type: "request-sync", game: "chess" });
+      else net.send({ type: "request-sync" });
+      return;
+    }
+    if (net.role === "host") {
+      assignChessColors(true);
+      if (state.game === "go") state.goColor = 1; // hôte = Noir
+      if (state.game === "chess" && mods.chess) {
+        if (window.MatchProtocol) {
+          net.send(MatchProtocol.chessColorAssignPayload("w", "b"));
+        }
+        sendChessStateSync();
+      } else if (state.go && window.MatchProtocol) {
+        net.send(MatchProtocol.stateSyncPayload(state.go, clock));
+      }
+    } else if (state.game === "chess") {
+      assignChessColors(false);
+      net.send({ type: "request-sync", game: "chess" });
+    } else if (state.game === "go") {
+      state.goColor = 2; // invité = Blanc
+      net.send({ type: "request-sync" });
+    }
+    if (net.role === "host" && state._teachingSession && state._teachingSession.enabled && net.connected()) {
+      net.send({
+        type: "teaching-start",
+        teacherIsWhite: state._teachingSession.teacherIsWhite,
+        asTeacher: true
+      });
+      net.send(state._teachingSession.serialize());
+    }
+    if (net.role === "host" && state._chessTeachingSession && state._chessTeachingSession.enabled && net.connected()) {
+      net.send({
+        type: "chess-teaching-start",
+        teacherIsWhite: state._chessTeachingSession.teacherIsWhite
+      });
+      net.send(state._chessTeachingSession.serialize());
+    }
+  }
+
+  function wireNetHandlers() {
+    net.onStatus = (msg, type) => {
+      setStatus(msg, type);
+      if (type === "ok" && /authentifié|Connecté|connecté/i.test(String(msg || ""))) {
+        onPeerAuthenticated();
+      }
+    };
+    net.onObserver = (info) => {
+      const elCount = document.getElementById("spectatorCount");
+      if (elCount) elCount.textContent = (info.count || 0) + " 👁️";
+    };
+    net.onMessage = onNetMessage;
+  }
+  function pieceHintLabel(type) { return mods.chess ? mods.chess.pieceHintLabel(type) : ""; }
+  function choosePieceHint(type) { if (mods.chess) mods.chess.choosePieceHint(type); }
+  function uciToSquares(uci) { return mods.chess ? mods.chess.uciToSquares(uci) : null; }
+  function pvToSan(fen, uciMoves) { return mods.chess ? mods.chess.pvToSan(fen, uciMoves) : ""; }
+  function normalizeFen(fen) {
+    return mods.chess ? mods.chess.normalizeFen(fen) : String(fen || "").split(" ").slice(0, 4).join(" ");
+  }
+  function renderGo() { if (mods.go) return mods.go.renderGo(); }
+  function paintGo() { if (mods.go) mods.go.paintGo(); }
+  function updateGoStatus() { if (mods.go) mods.go.updateGoStatus(); }
+  function updateCaptureCounters() { if (mods.go) mods.go.updateCaptureCounters(); }
+  function startNewGo() { if (mods.go) mods.go.startNewGo(); }
+  function goToMoveSide() { return mods.go ? mods.go.goToMoveSide() : "b"; }
+  function goPlayedSide() { return mods.go ? mods.go.goPlayedSide() : "w"; }
+  function goHintLabel(type) { return mods.go ? mods.go.goHintLabel(type) : ""; }
+  function chooseGoHint(type) { if (mods.go) mods.go.chooseGoHint(type); }
+
+  function loadScript(url) {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = url;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Script introuvable : " + url));
+      document.head.appendChild(script);
+    });
+  }
+
+  function enabledModules() {
+    if (Array.isArray(window.SB_MODULES) && window.SB_MODULES.length) return window.SB_MODULES.slice();
+    return ["chess", "go"];
+  }
+
+  function wireApi() {
+    api.setStatus = setStatus;
+    api.resetPairSeats = resetPairSeats;
+    api.advancePairSeat = advancePairSeat;
+    api.updateClockDisplay = updateClockDisplay;
+    api.updatePairsUI = updatePairsUI;
+    api.pairName = pairName;
+    api.currentPairName = currentPairName;
+    api.isHandBrainActive = isHandBrainActive;
+    api.isPairsMode = isPairsMode;
+    api.showAnalysisPanel = showAnalysisPanel;
+    api.recordGameResult = recordGameResult;
+    api.refreshRatingBadge = refreshRatingBadge;
+  }
+
+  function collectSession() {
+    return {
+      from: (window.SocialBoard && SocialBoard.projectId) || window.SB_PROJECT || "shell",
+      game: state.game,
+      pairNames: state.pairNames,
+      handBrain: state.handBrain,
+      renchess: state.renchess,
+      rengo: state.rengo,
+      pairSeat: state.pairSeat,
+      invite: el.inviteUrl ? el.inviteUrl.value : "",
+      clock: {
+        type: clock.type,
+        mainTime: clock.mainTime.slice(),
+        increment: clock.increment,
+        byoyomiTime: clock.byoyomiTime,
+        byoyomiPeriods: clock.byoyomiPeriods.slice(),
+        canadianStones: clock.canadianStones
+      }
+    };
+  }
+
+  function applyHandoff(session) {
+    if (!session || typeof session !== "object") return;
+    if (session.pairNames && session.pairNames.w && session.pairNames.b) {
+      state.pairNames = {
+        w: session.pairNames.w.slice(0, 2),
+        b: session.pairNames.b.slice(0, 2)
+      };
+      const ids = ["pairWA", "pairWB", "pairBA", "pairBB"];
+      const vals = state.pairNames.w.concat(state.pairNames.b);
+      ids.forEach((id, i) => {
+        const node = document.getElementById(id);
+        if (node && vals[i]) node.value = vals[i];
+      });
+    }
+    if (typeof session.handBrain === "boolean") state.handBrain = session.handBrain;
+    if (typeof session.renchess === "boolean") state.renchess = session.renchess;
+    if (typeof session.rengo === "boolean") state.rengo = session.rengo;
+    const rengoBox = document.getElementById("rengoCheck");
+    const renchessBox = document.getElementById("renchessCheck");
+    const hbBox = document.getElementById("handBrainCheck");
+    if (rengoBox) rengoBox.checked = !!state.rengo;
+    if (renchessBox) renchessBox.checked = !!state.renchess;
+    if (hbBox) hbBox.checked = !!state.handBrain;
+    const from = session.from === "chess" ? "les échecs" : session.from === "go" ? "le go" : "l'autre jeu";
+    setStatus("Session partagée depuis " + from + ".", "ok");
+    updatePairsUI();
+  }
+
+  function updateModuleBadge(enabled) {
+    const badge = document.getElementById("moduleBadge");
+    if (!badge) return;
+    const names = enabled.map((id) => (id === "chess" ? "Échecs" : "Go"));
+    const local = names.join(" + ") || "Aucun module";
+    badge.textContent = remoteProjects.length ? local + " · relié" : local;
+  }
+
+  function hideModuleDock() {
+    const dock = document.getElementById("moduleDock");
+    if (dock) dock.hidden = true;
+    if (el.board) el.board.hidden = false;
+  }
+
+  function showModuleDock(game) {
+    const dock = document.getElementById("moduleDock");
+    if (!dock || !el.board) return;
+    const session = collectSession();
+    session.target = game;
+    try { sessionStorage.setItem("sb-handoff", JSON.stringify(session)); } catch (err) { /* stockage plein */ }
+    if (window.SocialBoard) SocialBoard.emit("session:handoff", session, game);
+    let frame = document.getElementById("moduleFrame");
+    if (!frame) {
+      frame = document.createElement("iframe");
+      frame.id = "moduleFrame";
+      frame.title = game === "go" ? "Projet Go" : "Projet Échecs";
+      dock.appendChild(frame);
+    }
+    const page = game === "go" ? "go/index.html" : "chess/index.html";
+    const from = (window.SocialBoard && SocialBoard.projectId) || "shell";
+    const next = page + "?embed=1&from=" + encodeURIComponent(from);
+    if (frame.dataset.src !== next) {
+      frame.dataset.src = next;
+      frame.src = next;
+    }
+    dock.hidden = false;
+    el.board.hidden = true;
+    if (el.btnChess) el.btnChess.classList.toggle("on", game === "chess");
+    if (el.btnGo) el.btnGo.classList.toggle("on", game === "go");
+    setStatus(game === "go"
+      ? "Le projet Go est emboîté ici. La session (noms, cadence, binôme) est partagée."
+      : "Le projet Échecs est emboîté ici. La session (noms, cadence, binôme) est partagée.", "ok");
+  }
+
+  function activate(game) {
+    const loaded = (game === "chess" && mods.chess) || (game === "go" && mods.go);
+    if (loaded) {
+      hideModuleDock();
+      switchGame(game);
+      if (window.SocialBoard) {
+        SocialBoard.emit("game:active", collectSession(), game === "chess" ? "go" : "chess");
+      }
+      return;
+    }
+    if (document.body.classList.contains("embedded") && window.SocialBoard) {
+      SocialBoard.emit("dock:close", { game: game });
+      setStatus("Retour vers le projet qui contient celui-ci.", "ok");
+      return;
+    }
+    showModuleDock(game);
+  }
+
+  function handleBridgeMessage(msg) {
+    if (!msg) return;
+    if (msg.type === "presence" && msg.payload) {
+      if (window.SocialBoard && msg.from === SocialBoard.projectId) return;
+      const id = msg.payload.project;
+      if (id && remoteProjects.indexOf(id) === -1) remoteProjects.push(id);
+      updateModuleBadge(window.SB_ENABLED || enabledModules());
+      return;
+    }
+    if (msg.type === "dock:close") {
+      hideModuleDock();
+      const game = msg.payload && msg.payload.game;
+      if ((game === "chess" && mods.chess) || (game === "go" && mods.go)) switchGame(game);
+      return;
+    }
+    if (msg.type === "session:handoff" || msg.type === "game:propose") {
+      if (window.SocialBoard && msg.from === SocialBoard.projectId) return;
+      applyHandoff(msg.payload);
+    }
+  }
+
+  async function bootModules() {
+    wireApi();
+    const enabled = enabledModules();
+    window.SB_ENABLED = enabled;
+    if (enabled.indexOf("go") !== -1) {
+      await loadScript(new URL("../go/js/engine.js", import.meta.url).href);
+      const goMod = await import("../go/js/go-module.js");
+      mods.go = goMod.createGoModule({ state: state, el: el, net: net, sounds: sounds, clock: clock, analysis: analysis, api: api });
+      mods.go.init();
+      if (window.SocialBoard) SocialBoard.register({ id: "go", label: "Go" });
+    }
+    if (enabled.indexOf("chess") !== -1) {
+      const chessMod = await import("../chess/js/chess-module.js");
+      mods.chess = chessMod.createChessModule({ state: state, el: el, net: net, sounds: sounds, clock: clock, analysis: analysis, api: api });
+      mods.chess.init();
+      analysis.initStockfish();
+      if (window.SocialBoard) SocialBoard.register({ id: "chess", label: "Échecs" });
+    }
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("embed") === "1") document.body.classList.add("embedded");
+    if (params.get("embed") === "1") {
+      try {
+        const raw = sessionStorage.getItem("sb-handoff");
+        if (raw) applyHandoff(JSON.parse(raw));
+      } catch (err) { /* session illisible */ }
+    }
+    if (window.SocialBoard) {
+      SocialBoard.projectId = window.SB_PROJECT || (enabled.length > 1 ? "shell" : enabled[0] || "shell");
+      SocialBoard.on(handleBridgeMessage);
+      SocialBoard.emit("presence", { project: SocialBoard.projectId, games: enabled });
+    }
+    updateModuleBadge(enabled);
+    const want = requestedGame || params.get("g");
+    if (want === "go") activate("go");
+    else if (want === "chess") activate("chess");
+    else if (mods.chess) switchGame("chess");
+    else if (mods.go) switchGame("go");
+
+    if (mods.go && window.GoFeatures) {
+      goFeaturesApi = GoFeatures.wire({
+        state: state,
+        net: net,
+        clock: clock,
+        sounds: sounds,
+        analysis: analysis,
+        mods: mods,
+        setStatus: setStatus,
+        renderGo: renderGo,
+        paintGo: paintGo,
+        updateGoStatus: updateGoStatus,
+        updateClockDisplay: updateClockDisplay,
+        recordGameResult: recordGameResult,
+        showAnalysisPanel: showAnalysisPanel,
+        getUser: () => {
+          if (window.DiscordActivity && DiscordActivity.user) return DiscordActivity.user;
+          if (auth && auth.currentUser) return auth.currentUser;
+          return { id: currentUserId(), username: currentUserId() };
+        }
+      });
+    }
+
+    // Review post-partie
+    let reviewApi = null;
+    if (mods.go && window.ReviewUI) {
+      reviewApi = ReviewUI.wire({
+        state: state,
+        setStatus: setStatus,
+        renderGo: renderGo,
+        paintReview: () => paintGo()
+      });
+      state._onReviewClick = (x, y) => reviewApi && reviewApi.onBoardClick(x, y);
+    }
+
+    // Teaching (Take Control / marques / Resume)
+    let teachingApi = null;
+    if (mods.go && window.TeachingUI) {
+      teachingApi = TeachingUI.wire({
+        state: state,
+        net: net,
+        clock: clock,
+        sounds: sounds,
+        setStatus: setStatus,
+        renderGo: renderGo,
+        paintGo: paintGo,
+        updateGoStatus: updateGoStatus,
+        getUser: () => {
+          if (window.DiscordActivity && DiscordActivity.user) return DiscordActivity.user;
+          if (auth && auth.currentUser) return auth.currentUser;
+          return { id: currentUserId(), username: currentUserId() };
+        }
+      });
+      window.__sbTeaching = teachingApi;
+    }
+
+    // Teaching Échecs (Lichess-like arrows / Take Control)
+    let chessTeachingApi = null;
+    if (mods.chess && window.ChessTeachingUI) {
+      chessTeachingApi = ChessTeachingUI.wire({
+        state: state,
+        net: net,
+        clock: clock,
+        sounds: sounds,
+        setStatus: setStatus,
+        renderChess: renderChess,
+        paintChessTeachingOverlays: () => {
+          if (mods.chess && mods.chess.paintChessTeachingOverlays) {
+            mods.chess.paintChessTeachingOverlays();
+          }
+        },
+        createChess: () => {
+          const C = mods.chess.Chess;
+          return new C();
+        }
+      });
+      window.__sbChessTeaching = chessTeachingApi;
+    }
+
+    // Rengo 4 joueurs réseau
+    let rengoRoom = null;
+    if (mods.go && window.RengoNet) {
+      rengoRoom = RengoNet.createRengoRoom({ net: net, setStatus: setStatus });
+      rengoRoom.wireUi(() => {
+        if (window.DiscordActivity && DiscordActivity.user) return DiscordActivity.user;
+        if (auth && auth.currentUser) return auth.currentUser;
+        return { id: currentUserId(), username: currentUserId() };
+      });
+      state._rengoCanPlay = (turn, pairSeat) => {
+        if (!state.rengo || !rengoRoom.state.enabled) return true;
+        return rengoRoom.canPlay(turn, pairSeat);
+      };
+      const rengoCheckEl = document.getElementById("rengoCheck");
+      if (rengoCheckEl) {
+        rengoCheckEl.addEventListener("change", () => {
+          rengoRoom.enable(!!rengoCheckEl.checked && !!state.rengo);
+        });
+      }
+      window.__sbRengoRoom = rengoRoom;
+    }
+
+    // Automatch
+    if (mods.go && window.AutomatchClient) {
+      const am = new AutomatchClient();
+      window.__sbAutomatch = am;
+      const btnAm = document.getElementById("btnAutomatch");
+      if (btnAm) {
+        btnAm.addEventListener("click", async () => {
+          if (am.ticket) {
+            await am.cancel();
+            setStatus("Automatch annulé", "ok");
+            btnAm.textContent = "Automatch";
+            return;
+          }
+          am.onStatus = setStatus;
+          am.onMatch = async (match) => {
+            btnAm.textContent = "Automatch";
+            setStatus("Match trouvé ! Salle " + match.room, "ok");
+            state.matchMeta.ranked = !!match.ranked;
+            state.matchMeta.opponentId = (match.host && match.guest)
+              ? (match.host.userId === currentUserId() ? match.guest.userId : match.host.userId)
+              : "opponent";
+            const youHost = match.host && match.host.userId === currentUserId();
+            // Fallback : ticket info
+            const asHost = youHost || (window.__sbLastAmHost === true);
+            state.mode = "online";
+            net.onMessage = onNetMessage;
+            activate("go");
+            if (asHost) {
+              pendingDiscordRoom = { code: match.room, game: match.game || "go" };
+              net.init({ asHost: true });
+              // forcer token de la salle automatch
+              net.roomToken = match.token;
+            } else {
+              net.roomToken = match.token;
+              // Attendre que l'hôte publie peerId
+              setStatus("Connexion à l'adversaire…", "ok");
+              const tryJoin = async () => {
+                for (let i = 0; i < 20; i++) {
+                  const info = await rooms.resolve(match.room);
+                  if (info && info.peerId && String(info.peerId).indexOf("pending_") !== 0) {
+                    net.join(info.peerId, match.token || info.token);
+                    return;
+                  }
+                  await new Promise((r) => setTimeout(r, 500));
+                }
+                setStatus("Hôte automatch introuvable", "err");
+              };
+              tryJoin();
+            }
+          };
+          try {
+            btnAm.textContent = "Annuler file…";
+            const profile = window.RatingSystem
+              ? RatingSystem.getProfile(currentUserId())
+              : { goElo: 1000 };
+            const res = await am.enqueue({
+              userId: currentUserId(),
+              name: currentUserId(),
+              game: "go",
+              size: state.go ? state.go.size : 19,
+              ranked: !(state.matchMeta && state.matchMeta.ranked === false),
+              elo: profile.goElo
+            });
+            window.__sbLastAmHost = !!res.youAreHost;
+            if (res.match) am.onMatch(res.match);
+          } catch (err) {
+            btnAm.textContent = "Automatch";
+            setStatus("Automatch : " + (err.message || err), "err");
+          }
+        });
+      }
+    }
+
+    if (params.get("observe") === "1") state.matchMeta.observe = true;
+    const chatBox = document.getElementById("gameChat");
+    if (chatBox && mods.go) chatBox.style.display = "";
+  }
+
   
   // Éléments DOM
   const el = {
@@ -108,15 +621,142 @@ import { Chess } from "../vendor/chess.min.js";
     btnClockCancel: document.getElementById("btnClockCancel")
   };
 
-  // Configuration des sons
-  if (el.soundOn) {
-    el.soundOn.addEventListener("change", (e) => {
-      sounds.setEnabled(e.target.checked);
-    });
+  function currentUserId() {
+    if (window.DiscordActivity && DiscordActivity.user && DiscordActivity.user.id) {
+      return String(DiscordActivity.user.id);
+    }
+    if (auth && auth.currentUser && auth.currentUser.id) return String(auth.currentUser.id);
+    if (auth && auth.currentUser && auth.currentUser.username) return String(auth.currentUser.username);
+    return "guest";
   }
+
+  function refreshRatingBadge() {
+    const badge = document.getElementById("userRating");
+    if (!badge || !window.RatingSystem) return;
+    const info = RatingSystem.displayFor(currentUserId(), state.game === "chess" ? "chess" : "go");
+    badge.textContent = state.game === "chess"
+      ? "Elo " + info.label
+      : info.label + " (" + Math.round(info.elo) + ")";
+    badge.title = state.game === "go"
+      ? "Classement Go (échelle kyu/dan, Elo interne EGF)"
+      : "Classement échecs Elo";
+  }
+
+  function recordGameResult(winnerColor) {
+    // winnerColor: 1/'b' Noir, 2/'w' Blanc, 0/null nulle
+    if (!window.RatingSystem) return;
+    if (state.game === "go" && state.matchMeta && state.matchMeta.ranked === false) {
+      setStatus("Partie libre — classement non modifié", "ok");
+      return;
+    }
+    const playerColor = state.game === "go"
+      ? (state.goColor === 1 ? "b" : "w")
+      : (state.color === "b" ? "b" : "w");
+    let result = 0.5;
+    const w = winnerColor === 1 || winnerColor === "b" ? "b"
+      : (winnerColor === 2 || winnerColor === "w" ? "w" : null);
+    if (w) result = w === playerColor ? 1 : 0;
+    const out = RatingSystem.recordResult({
+      game: state.game === "chess" ? "chess" : "go",
+      playerId: currentUserId(),
+      opponentId: (state.matchMeta && state.matchMeta.opponentId) || "opponent",
+      result: result,
+      playerColor: playerColor,
+      boardSize: state.go ? state.go.size : 19,
+      handicap: (state.go && state.go.handicap) || (state.matchMeta && state.matchMeta.handicap) || 0,
+      ranked: !(state.matchMeta && state.matchMeta.ranked === false)
+    });
+    refreshRatingBadge();
+    if (out && out.ranked) {
+      setStatus(
+        "Classement " + out.playerRank +
+          (out.delta ? " (" + (out.delta > 0 ? "+" : "") + out.delta + ")" : ""),
+        "ok"
+      );
+    }
+  }
+
+  // Configuration des sons
+  const soundToggles = [
+    el.soundOn,
+    document.getElementById("soundOnPlay")
+  ].filter(Boolean);
+  const soundVols = [
+    document.getElementById("soundVolume"),
+    document.getElementById("soundVolumePlay")
+  ].filter(Boolean);
+
+  function syncSoundToggles(on) {
+    soundToggles.forEach((box) => { box.checked = on; });
+  }
+  function syncSoundVolumes(v) {
+    soundVols.forEach((r) => { r.value = String(v); });
+  }
+
+  soundToggles.forEach((box) => {
+    box.addEventListener("change", (e) => {
+      const on = !!e.target.checked;
+      sounds.setEnabled(on);
+      syncSoundToggles(on);
+      if (on) {
+        if (state.game === "chess" && sounds.piece) sounds.piece();
+        else if (sounds.stone) sounds.stone();
+        else sounds.move();
+      }
+    });
+  });
+  soundVols.forEach((r) => {
+    sounds.setVolume(parseFloat(r.value) || 0.62);
+    r.addEventListener("input", (e) => {
+      const v = parseFloat(e.target.value) || 0.62;
+      sounds.setVolume(v);
+      syncSoundVolumes(v);
+      if (sounds.enabled) sounds.select();
+    });
+  });
   sounds.init();
 
-  // Initialiser les plateformes
+  (function initSoundStyle() {
+    const labels = {
+      varied: "Timbre Nuances — pierres vivantes",
+      fixed: "Timbre Franc — même clic + misclic"
+    };
+    function applyStyle(v, announce) {
+      const style = v === "fixed" ? "fixed" : "varied";
+      sounds.setStyle(style);
+      try { localStorage.setItem("sb-sound-style", style); } catch (_) { /* ignore */ }
+      document.querySelectorAll("[data-sound-style]").forEach((btn) => {
+        btn.classList.toggle("on", btn.getAttribute("data-sound-style") === style);
+      });
+      if (announce) {
+        setStatus(labels[style], "ok");
+        if (sounds.enabled) {
+          if (style === "fixed") sounds.stone();
+          else { sounds.stone(); setTimeout(() => sounds.stone(), 120); }
+        }
+      }
+    }
+    let saved = null;
+    try { saved = localStorage.getItem("sb-sound-style"); } catch (_) { /* ignore */ }
+    applyStyle(saved === "fixed" ? "fixed" : "varied", false);
+    document.querySelectorAll("[data-sound-style]").forEach((btn) => {
+      btn.addEventListener("click", () => applyStyle(btn.getAttribute("data-sound-style"), true));
+    });
+  })();
+
+  // Autoplay : débloquer l’audio au premier geste
+  const unlockAudio = () => { sounds.unlock(); };
+  document.addEventListener("pointerdown", unlockAudio, { passive: true });
+  document.addEventListener("keydown", unlockAudio, { passive: true });
+  refreshRatingBadge();
+  if (window.RatingSystem && RatingSystem.pullFromServer) {
+    RatingSystem.pullFromServer(currentUserId()).then(() => refreshRatingBadge());
+  }
+
+  // Initialiser les plateformes (après config distante si dispo)
+  if (window.CONFIG && window.CONFIG.ready) {
+    try { await window.CONFIG.ready; } catch (_) { /* offline */ }
+  }
   platforms.init();
   
   // Afficher le status de la plateforme (debug)
@@ -145,1100 +785,7 @@ import { Chess } from "../vendor/chess.min.js";
 
   // ========== ÉCHECS ==========
   
-  function renderChess() {
-    let html = '<div class="chess-frame">';
-    html += '<div class="ranks">';
-    for (let r = 8; r >= 1; r--) {
-      html += '<span>' + r + '</span>';
-    }
-    html += '</div>';
-    
-    html += '<div class="chess-board">';
-    
-    const moves = state.selected ? state.chess.moves({ square: state.selected, verbose: true }) : [];
-    const legalSquares = new Set(moves.map(m => m.to));
-    
-    for (let rank = 0; rank < 8; rank++) {
-      for (let file = 0; file < 8; file++) {
-        const sq = FILES[file] + (8 - rank);
-        const piece = state.chess.get(sq);
-        const pieceImg = piece ? PIECES[piece.color + piece.type] : "";
-        const isLight = (rank + file) % 2 === 0;
-        let cls = "sq " + (isLight ? "light" : "dark");
-        
-        if (state.selected === sq) cls += " sel";
-        if (state.lastMove && (state.lastMove.from === sq || state.lastMove.to === sq)) cls += " last";
-        if (state.analysisMove && state.analysisMove.from === sq) cls += " analysis-from";
-        if (state.analysisMove && state.analysisMove.to === sq) cls += " analysis-to";
-        
-        // Coup en attente de confirmation (antimisclic)
-        if (state.pendingChessMove && 
-            (state.pendingChessMove.from === sq || state.pendingChessMove.to === sq)) {
-          cls += " pending";
-        }
-        
-        // Indicateurs de coups légaux
-        if (legalSquares.has(sq)) {
-          cls += piece ? " legal-capture" : " legal-move";
-        }
-        if (state.handBrain && piece && piece.color === state.chess.turn()) {
-          const hint = state.pieceHint[state.chess.turn()];
-          if (hint && piece.type === hint) cls += " hint-piece";
-        }
-        if (state.chessVariant === "kingOfTheHill" && HILL_SQUARES.indexOf(sq) !== -1) {
-          cls += " koth-sq";
-        }
-        
-        html += '<div class="' + cls + '" data-sq="' + sq + '">';
-        if (pieceImg) {
-          html += '<img src="images/pieces/' + pieceImg + '.svg" class="pc" draggable="true" alt="' + piece.type + '">';
-        }
-        html += '</div>';
-      }
-    }
-    
-    html += '</div>';
-    html += '<div class="files">';
-    for (let f = 0; f < 8; f++) {
-      html += '<span>' + FILES[f] + '</span>';
-    }
-    html += '</div>';
-    html += '</div>';
-    
-    el.board.innerHTML = html;
-    
-    // Attacher les événements avec anti-slip
-    document.querySelectorAll(".sq").forEach(sq => {
-      sq.addEventListener("click", onChessClick);
-      sq.addEventListener("mousemove", () => {
-        chessLastMouseMove = Date.now();
-      });
-      
-      // Touch events pour mobile (optimisé)
-      sq.addEventListener("touchstart", onChessTouchStart, { passive: true });
-      sq.addEventListener("touchmove", onChessTouchMove, { passive: true });
-      sq.addEventListener("touchend", onChessTouchEnd, { passive: true });
-    });
-    
-    // Drag & Drop (desktop)
-    document.querySelectorAll(".pc").forEach(pc => {
-      const sq = pc.parentElement;
-      pc.addEventListener("dragstart", onDragStart);
-      sq.addEventListener("dragover", onDragOver);
-      sq.addEventListener("drop", onDrop);
-      sq.addEventListener("dragend", onDragEnd);
-    });
-    
-    document.querySelectorAll(".sq").forEach(sq => {
-      sq.addEventListener("dragover", onDragOver);
-      sq.addEventListener("drop", onDrop);
-    });
-    
-    updateChessStatus();
-    updateVariantHud();
-  }
 
-  function onDragStart(e) {
-    const sq = e.target.parentElement.dataset.sq;
-    const piece = state.chess.get(sq);
-    
-    if (isChessVariantOver() || !piece || piece.color !== state.chess.turn()) {
-      e.preventDefault();
-      return;
-    }
-    
-    state.draggedPiece = sq;
-    e.target.classList.add("dragging-piece");
-    
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", sq);
-    }
-    
-    // Afficher les coups légaux
-    state.selected = sq;
-    setTimeout(() => renderChess(), 0);
-  }
-
-  function onDragOver(e) {
-    e.preventDefault();
-    if (e.dataTransfer) {
-      e.dataTransfer.dropEffect = "move";
-    }
-  }
-
-  function onDrop(e) {
-    e.preventDefault();
-    const to = e.currentTarget.dataset.sq;
-    if (state.draggedPiece && to) {
-      attemptMove(state.draggedPiece, to);
-    }
-  }
-
-  function onDragEnd(e) {
-    e.target.classList.remove("dragging-piece");
-    state.draggedPiece = null;
-    if (!state.pendingPromotion) {
-      state.selected = null;
-      renderChess();
-    }
-  }
-  
-  // Touch support pour mobile (échecs)
-  let chessTouchStart = null;
-  let chessTouchStartTime = 0;
-  let chessTouchMoved = false;
-  
-  function vibrateTouch(duration = 10) {
-    if (navigator.vibrate) {
-      navigator.vibrate(duration);
-    }
-  }
-  
-  function onChessTouchStart(e) {
-    const sq = e.currentTarget.dataset.sq;
-    const piece = state.chess.get(sq);
-    
-    chessTouchStartTime = Date.now();
-    chessTouchMoved = false;
-    
-    if (piece && piece.color === state.chess.turn()) {
-      chessTouchStart = sq;
-      state.selected = sq;
-      e.currentTarget.querySelector('.pc')?.classList.add('dragging-piece');
-      vibrateTouch(10);
-      renderChess();
-    }
-  }
-  
-  function onChessTouchMove(e) {
-    chessTouchMoved = true;
-    chessLastMouseMove = Date.now();
-  }
-  
-  function onChessTouchEnd(e) {
-    if (chessTouchStart) {
-      const sq = e.currentTarget.dataset.sq;
-      e.currentTarget.querySelector('.pc')?.classList.remove('dragging-piece');
-      
-      // Anti-misclick tactile : rejeter si mouvement détecté ou trop rapide
-      const touchDuration = Date.now() - chessTouchStartTime;
-      
-      if (state.antiMisclickChess && chessTouchMoved && touchDuration < 150) {
-        sounds.refuse();
-        chessTouchStart = null;
-        chessTouchMoved = false;
-        return;
-      }
-      
-      if (sq !== chessTouchStart) {
-        attemptMove(chessTouchStart, sq);
-        vibrateTouch(15);
-      } else {
-        // Clic sur la même case : sélection ou désélection
-        vibrateTouch(10);
-      }
-      
-      chessTouchStart = null;
-      chessTouchMoved = false;
-    }
-  }
-
-  function onChessClick(e) {
-    const sq = e.currentTarget.dataset.sq;
-    
-    if (!sq) return;
-    if (isChessVariantOver()) return;
-    
-    // Anti-slip : rejeter si la souris a bougé récemment (si activé)
-    if (state.antiMisclickChess) {
-      const timeSinceMove = Date.now() - chessLastMouseMove;
-      if (timeSinceMove < ANTI_SLIP_DELAY) {
-        sounds.refuse();
-        setStatus(`⚠️ Souris instable - attendez ${Math.ceil((ANTI_SLIP_DELAY - timeSinceMove) / 100) / 10}s`, "err");
-        return;
-      }
-    }
-    
-    // Si on clique sur une pièce de notre couleur, annuler le coup en attente et sélectionner la nouvelle pièce
-    const piece = state.chess.get(sq);
-    if (piece && piece.color === state.chess.turn()) {
-      state.selected = sq;
-      state.pendingChessMove = null;
-      sounds.select();
-      renderChess();
-      return;
-    }
-    
-    if (!state.selected) {
-      // Pas de pièce sélectionnée et clic sur case vide : ignorer
-      return;
-    } else {
-      // Jouer le coup
-      if (sq === state.selected) {
-        state.selected = null;
-        state.pendingChessMove = null;
-        renderChess();
-        return;
-      }
-      
-      attemptMove(state.selected, sq);
-    }
-  }
-
-  function attemptMove(from, to) {
-    if (isChessVariantOver()) return;
-    // Antimisclic pour les échecs (si activé)
-    if (state.antiMisclickChess) {
-      // Si c'est déjà le coup en attente, confirmer
-      if (state.pendingChessMove && 
-          state.pendingChessMove.from === from && 
-          state.pendingChessMove.to === to) {
-        
-        // Vérifier si c'est une promotion
-        const piece = state.chess.get(from);
-        const isPromotion = piece && piece.type === 'p' && 
-                            ((piece.color === 'w' && to[1] === '8') || 
-                             (piece.color === 'b' && to[1] === '1'));
-        
-        if (isPromotion) {
-          state.pendingPromotion = { from, to };
-          state.pendingChessMove = null;
-          showPromotionModal();
-          return;
-        }
-        
-        state.pendingChessMove = null;
-        executeMove(from, to, 'q');
-      } else {
-        // Nouveau coup : vérifier s'il est légal
-        const moves = state.chess.moves({ square: from, verbose: true });
-        const isLegal = moves.some(m => m.to === to);
-        
-        if (isLegal) {
-          // Mettre en attente
-          state.pendingChessMove = { from, to };
-          sounds.select();
-          renderChess();
-        } else {
-          sounds.refuse();
-          state.selected = null;
-          state.pendingChessMove = null;
-          renderChess();
-        }
-      }
-    } else {
-      // Mode sans antimisclic
-      const piece = state.chess.get(from);
-      const isPromotion = piece && piece.type === 'p' && 
-                          ((piece.color === 'w' && to[1] === '8') || 
-                           (piece.color === 'b' && to[1] === '1'));
-      
-      if (isPromotion) {
-        state.pendingPromotion = { from, to };
-        showPromotionModal();
-        return;
-      }
-      
-      executeMove(from, to, 'q');
-    }
-  }
-
-  function executeMove(from, to, promotion = 'q') {
-    const move = state.chess.move({
-      from: from,
-      to: to,
-      promotion: promotion
-    });
-    
-    if (move) {
-      state.lastMove = move;
-      state.analysisMove = null;
-      sounds.move();
-      state.selected = null;
-      if (state.handBrain) {
-        const hint = state.pieceHint[move.color];
-        const hintLabel = pieceHintLabel(hint);
-        const playedLabel = pieceHintLabel(move.piece);
-        if (hint && move.piece !== hint) {
-          setTimeout(() => {
-            setStatus("✋ La main a joué " + playedLabel + " (la tête avait dit " + hintLabel + ")", "ok");
-          }, 0);
-        }
-        state.pieceHint[move.color] = null;
-      }
-      advancePairSeat(move.color);
-      applyVariantAfterMove(move);
-      renderChess();
-      
-      if (clock.type !== "none") {
-        clock.switchPlayer();
-        updateClockDisplay();
-      }
-      
-      if (state.chess.in_check()) sounds.check();
-      if (isChessVariantOver()) {
-        sounds.win();
-        clock.stop();
-      } else if (state.chess.in_checkmate()) {
-        sounds.win();
-      }
-      
-      if (net.connected()) {
-        net.send({
-          type: "chess",
-          fen: state.chess.fen(),
-          variant: state.chessVariant,
-          checks: { w: state.checksGiven.w, b: state.checksGiven.b }
-        });
-      }
-    } else {
-      sounds.refuse();
-      state.selected = null;
-      renderChess();
-    }
-  }
-
-  function showPromotionModal() {
-    el.promotionModal.style.display = "flex";
-    
-    const buttons = el.promotionModal.querySelectorAll(".promo-btn");
-    buttons.forEach(btn => {
-      btn.onclick = () => {
-        const piece = btn.dataset.piece;
-        el.promotionModal.style.display = "none";
-        
-        if (state.pendingPromotion) {
-          executeMove(state.pendingPromotion.from, state.pendingPromotion.to, piece);
-          state.pendingPromotion = null;
-        }
-      };
-    });
-  }
-
-  function kingSquare(color) {
-    const board = state.chess.board();
-    for (let rank = 0; rank < 8; rank++) {
-      for (let file = 0; file < 8; file++) {
-        const piece = board[rank][file];
-        if (piece && piece.type === "k" && piece.color === color) {
-          return FILES[file] + (8 - rank);
-        }
-      }
-    }
-    return null;
-  }
-
-  function isKingOnHill(color) {
-    const sq = kingSquare(color);
-    return !!sq && HILL_SQUARES.indexOf(sq) !== -1;
-  }
-
-  function applyVariantAfterMove(move) {
-    if (!move) return;
-    if (state.chessVariant === "threeCheck" && state.chess.in_check()) {
-      state.checksGiven[move.color] += 1;
-      if (state.checksGiven[move.color] >= 3) {
-        state.variantWinner = move.color;
-      }
-    }
-    if (state.chessVariant === "kingOfTheHill" && isKingOnHill(move.color)) {
-      state.variantWinner = move.color;
-    }
-  }
-
-  function isChessVariantOver() {
-    return !!state.variantWinner || state.chess.game_over();
-  }
-
-  function variantSideName(color) {
-    return color === "w" ? "Les blancs" : "Les noirs";
-  }
-
-  function updateVariantHud() {
-    const hud = document.getElementById("variantHud");
-    if (!hud) return;
-    while (hud.firstChild) hud.removeChild(hud.firstChild);
-    if (state.game !== "chess" || state.chessVariant === "standard") {
-      hud.style.display = "none";
-      return;
-    }
-    hud.style.display = "";
-    if (state.chessVariant === "threeCheck") {
-      const bar = document.createElement("div");
-      bar.className = "checks-bar";
-      ["w", "b"].forEach((side) => {
-        const wrap = document.createElement("span");
-        wrap.appendChild(document.createTextNode(side === "w" ? "Blanc " : "Noir "));
-        for (let i = 0; i < 3; i++) {
-          const pip = document.createElement("span");
-          pip.className = "check-pip" + (i < state.checksGiven[side] ? " on" : "");
-          wrap.appendChild(pip);
-        }
-        bar.appendChild(wrap);
-      });
-      hud.appendChild(bar);
-    } else if (state.chessVariant === "kingOfTheHill") {
-      hud.textContent = "Roi de la colline — amenez le roi en d4, d5, e4 ou e5";
-    }
-  }
-
-  function applyChessVariantFromNet(data) {
-    if (data.variant === "standard" || data.variant === "threeCheck" || data.variant === "kingOfTheHill") {
-      state.chessVariant = data.variant;
-      const sel = document.getElementById("chessVariant");
-      if (sel) sel.value = data.variant;
-    }
-  }
-
-  function updateChessStatus() {
-    let status = "";
-    let statusClass = "";
-    
-    if (state.chess.in_checkmate()) {
-      status = "⚔️ ÉCHEC ET MAT ! " + (state.chess.turn() === "w" ? "Les noirs" : "Les blancs") + " gagnent !";
-      statusClass = "ok";
-    } else if (state.variantWinner) {
-      if (state.chessVariant === "threeCheck") {
-        status = "3️⃣ 3 échecs ! " + variantSideName(state.variantWinner) + " gagnent !";
-      } else if (state.chessVariant === "kingOfTheHill") {
-        status = "👑 Le roi a conquis la colline ! " + variantSideName(state.variantWinner) + " gagnent !";
-      } else {
-        status = variantSideName(state.variantWinner) + " gagnent !";
-      }
-      statusClass = "ok";
-    } else if (state.chess.in_draw()) {
-      status = "🤝 Partie nulle";
-      statusClass = "ok";
-    } else if (state.chess.in_stalemate()) {
-      status = "🤝 Pat - partie nulle";
-      statusClass = "ok";
-    } else if (state.chess.in_check()) {
-      status = "⚠️ ÉCHEC ! " + (state.chess.turn() === "w" ? "Trait aux Blancs" : "Trait aux Noirs");
-      statusClass = "err";
-    } else {
-      const turn = state.chess.turn() === "w" ? "♔ Trait aux Blancs" : "♚ Trait aux Noirs";
-      status = turn;
-      statusClass = state.chess.turn() === "w" ? "white" : "black";
-    }
-    if (state.renchess && !isChessVariantOver()) {
-      if (state.handBrain) {
-        const side = state.chess.turn();
-        const hint = state.pieceHint[side];
-        if (!hint) {
-          status += " — 🧠 Tête (" + pairName(side, 0) + ") : choisissez une pièce";
-        } else {
-          status += " — ✋ Main (" + pairName(side, 1) + ") : jouez" +
-            (hint ? " (suggestion : " + pieceHintLabel(hint) + ")" : "");
-        }
-      } else {
-        status += " — " + currentPairName(state.chess.turn());
-      }
-    }
-    setStatus(status, statusClass);
-    updatePairsUI();
-  }
-
-  function startNewChess(opts) {
-    opts = opts || {};
-    const sel = document.getElementById("chessVariant");
-    if (sel && sel.value) state.chessVariant = sel.value;
-    state.chess = new Chess();
-    state.selected = null;
-    state.lastMove = null;
-    state.pendingChessMove = null;
-    state.pieceHint = { w: null, b: null };
-    state.checksGiven = { w: 0, b: 0 };
-    state.variantWinner = null;
-    state.analysisMove = null;
-    resetPairSeats();
-    renderChess();
-    if (!opts.fromNet && net.connected()) {
-      net.send({
-        type: "chess",
-        fen: state.chess.fen(),
-        variant: state.chessVariant,
-        checks: { w: 0, b: 0 },
-        reset: true
-      });
-    }
-  }
-
-  // ========== GO ==========
-
-  let goCanvas = null;
-  let goHover = null;
-  let goBlackStone = null;
-  let goWhiteStone = null;
-  
-  // Anti-misclick : la souris/doigt doit être immobile pendant ~300ms avant d'accepter un clic
-  let goLastMouseMove = Date.now();
-  let goLastTouchMove = Date.now();
-  let goTouchStartTime = 0;
-  let goTouchHasMoved = false;
-  const TOUCH_MIN_DURATION = 100; // durée minimale pour un tap valide (ms)
-  
-  // Charger les images des pierres
-  function loadGoStones() {
-    if (!goBlackStone) {
-      goBlackStone = new Image();
-      goBlackStone.src = 'images/go/black.svg';
-    }
-    if (!goWhiteStone) {
-      goWhiteStone = new Image();
-      goWhiteStone.src = 'images/go/white.svg';
-    }
-  }
-
-  function renderGo() {
-    const size = Math.min(el.board.clientWidth || 400, 600);
-    
-    loadGoStones();
-    
-    if (!goCanvas) {
-      el.board.innerHTML = "";
-      goCanvas = document.createElement("canvas");
-      goCanvas.className = "go-board";
-      goCanvas.width = size;
-      goCanvas.height = size;
-      el.board.appendChild(goCanvas);
-      
-      goCanvas.addEventListener("click", onGoClick);
-      goCanvas.addEventListener("mousemove", onGoMove);
-      goCanvas.addEventListener("mouseleave", () => {
-        goHover = null;
-        paintGo();
-      });
-      
-      // Touch events optimisés pour mobile (Go)
-      goCanvas.addEventListener("touchstart", (e) => {
-        e.preventDefault(); // Empêcher le scroll
-        goTouchStartTime = Date.now();
-        goTouchHasMoved = false;
-        goLastTouchMove = Date.now();
-        
-        const touch = e.touches[0];
-        const mouseEvent = new MouseEvent("mousemove", {
-          clientX: touch.clientX,
-          clientY: touch.clientY
-        });
-        onGoMove(mouseEvent);
-        vibrateTouch(5); // Feedback léger
-      }, { passive: false });
-      
-      goCanvas.addEventListener("touchmove", (e) => {
-        e.preventDefault();
-        goTouchHasMoved = true;
-        goLastTouchMove = Date.now();
-        
-        const touch = e.touches[0];
-        const mouseEvent = new MouseEvent("mousemove", {
-          clientX: touch.clientX,
-          clientY: touch.clientY
-        });
-        onGoMove(mouseEvent);
-      }, { passive: false });
-      
-      goCanvas.addEventListener("touchend", (e) => {
-        e.preventDefault();
-        
-        const touchDuration = Date.now() - goTouchStartTime;
-        const timeSinceMove = Date.now() - goLastTouchMove;
-        
-        // Anti-misclick tactile pour Go
-        if (state.antiMisclickGo) {
-          // Rejeter si :
-          // 1. Le doigt a bougé récemment (< 200ms)
-          // 2. Ou le tap était trop court (< 80ms) - probablement un glissement accidentel
-          if ((goTouchHasMoved && timeSinceMove < 200) || touchDuration < 80) {
-            sounds.refuse();
-            vibrateTouch(20); // Vibration de refus
-            goHover = null;
-            paintGo();
-            return;
-          }
-        }
-        
-        const touch = e.changedTouches[0];
-        const mouseEvent = new MouseEvent("click", {
-          clientX: touch.clientX,
-          clientY: touch.clientY
-        });
-        onGoClick(mouseEvent);
-        
-        // Feedback tactile pour confirmation
-        if (state.pendingGoMove) {
-          vibrateTouch(10);
-        } else {
-          vibrateTouch(15);
-        }
-      }, { passive: false });
-    } else {
-      goCanvas.width = size;
-      goCanvas.height = size;
-    }
-    
-    // Attendre que les images soient chargées
-    if (goBlackStone.complete && goWhiteStone.complete) {
-      paintGo();
-    } else {
-      goBlackStone.onload = goWhiteStone.onload = () => paintGo();
-    }
-    updateGoStatus();
-    updateCaptureCounters();
-  }
-
-  function paintGo() {
-    const ctx = goCanvas.getContext("2d");
-    const size = goCanvas.width;
-    const boardSize = state.go.size;
-    const margin = size * 0.07;
-    const cellSize = (size - 2 * margin) / (boardSize - 1);
-    
-    // Fond bois réaliste - couleur plus chaude
-    const woodGradient = ctx.createLinearGradient(0, 0, 0, size);
-    woodGradient.addColorStop(0, "#e0c080");
-    woodGradient.addColorStop(0.2, "#d4b474");
-    woodGradient.addColorStop(0.4, "#c9a860");
-    woodGradient.addColorStop(0.6, "#d4ad66");
-    woodGradient.addColorStop(0.8, "#c9a860");
-    woodGradient.addColorStop(1, "#c5a158");
-    ctx.fillStyle = woodGradient;
-    ctx.fillRect(0, 0, size, size);
-    
-    // Veines du bois horizontales subtiles (STATIQUE)
-    ctx.globalAlpha = 0.06;
-    for (let i = 0; i < 12; i++) {
-      const y = (size / 12) * i + (i * 11) % 40;
-      const grad = ctx.createLinearGradient(0, y, 0, y + 25);
-      grad.addColorStop(0, "transparent");
-      grad.addColorStop(0.5, "#9d7f4a");
-      grad.addColorStop(1, "transparent");
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, y, size, 25);
-    }
-    
-    // Texture fine du bois (STATIQUE)
-    ctx.globalAlpha = 0.03;
-    for (let i = 0; i < size; i += 3) {
-      for (let j = 0; j < size; j += 4) {
-        const noise = ((i * 7 + j * 13) % 100) / 100;
-        if (noise > 0.5) {
-          ctx.fillStyle = noise > 0.75 ? "#8b6f47" : "#e5d0a0";
-          ctx.fillRect(i, j, 1, ((i + j) % 8) + 1);
-        }
-      }
-    }
-    ctx.globalAlpha = 1.0;
-    
-    // Lignes du plateau (lignes noires fines et nettes)
-    ctx.strokeStyle = "#000000";
-    ctx.lineWidth = boardSize >= 19 ? 1.0 : 1.2;
-    ctx.lineCap = "square";
-    
-    for (let i = 0; i < boardSize; i++) {
-      const pos = margin + i * cellSize;
-      
-      // Lignes horizontales
-      ctx.beginPath();
-      ctx.moveTo(margin, pos);
-      ctx.lineTo(size - margin, pos);
-      ctx.stroke();
-      
-      // Lignes verticales
-      ctx.beginPath();
-      ctx.moveTo(pos, margin);
-      ctx.lineTo(pos, size - margin);
-      ctx.stroke();
-    }
-    
-    // Bordure extérieure épaisse
-    ctx.strokeStyle = "#4a3820";
-    ctx.lineWidth = 4;
-    const borderOffset = 2;
-    ctx.strokeRect(
-      margin - borderOffset, 
-      margin - borderOffset, 
-      (boardSize - 1) * cellSize + borderOffset * 2, 
-      (boardSize - 1) * cellSize + borderOffset * 2
-    );
-    
-    // Coordonnées du goban
-    if (el.showCoords && el.showCoords.checked) {
-      ctx.fillStyle = "#2a2a2a";
-      ctx.font = `bold ${Math.max(10, cellSize * 0.35)}px sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      
-      const letters = "ABCDEFGHJKLMNOPQRST"; // Pas de 'I' dans les coordonnées Go
-      
-      // Coordonnées horizontales (lettres)
-      for (let i = 0; i < boardSize; i++) {
-        const x = margin + i * cellSize;
-        ctx.fillText(letters[i], x, margin * 0.4);
-        ctx.fillText(letters[i], x, size - margin * 0.4);
-      }
-      
-      // Coordonnées verticales (chiffres)
-      for (let i = 0; i < boardSize; i++) {
-        const y = margin + i * cellSize;
-        const num = boardSize - i;
-        ctx.fillText(num.toString(), margin * 0.4, y);
-        ctx.fillText(num.toString(), size - margin * 0.4, y);
-      }
-    }
-    
-    // Points de repère (hoshi)
-    drawHoshiPoints(ctx, boardSize, margin, cellSize);
-    paintGoHintZones(ctx, boardSize, margin, cellSize, cellSize * 0.47);
-    
-    // Pierres 3D
-    const stoneRadius = cellSize * 0.47;
-    for (let y = 0; y < boardSize; y++) {
-      for (let x = 0; x < boardSize; x++) {
-        const color = state.go.at(x, y);
-        if (color > 0) {
-          const px = margin + x * cellSize;
-          const py = margin + y * cellSize;
-          
-          drawStone(ctx, px, py, stoneRadius, color);
-          
-          // Marquer le dernier coup
-          if (state.lastGoMove && state.lastGoMove.x === x && state.lastGoMove.y === y) {
-            ctx.fillStyle = color === 1 ? "#fff" : "#000";
-            ctx.globalAlpha = 0.8;
-            ctx.beginPath();
-            ctx.arc(px, py, stoneRadius * 0.3, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.globalAlpha = 1.0;
-          }
-        }
-      }
-    }
-    
-    paintGoAnalysisOverlay(ctx, boardSize, margin, cellSize, stoneRadius);
-
-    // Pierre en attente de confirmation (antimisclic)
-    if (state.pendingGoMove) {
-      const px = margin + state.pendingGoMove.x * cellSize;
-      const py = margin + state.pendingGoMove.y * cellSize;
-      const previewImg = state.go.turn === 1 ? goBlackStone : goWhiteStone;
-      
-      if (previewImg && previewImg.complete) {
-        // Pierre semi-transparente
-        ctx.save();
-        ctx.globalAlpha = 0.65;
-        const previewSize = stoneRadius * 2;
-        ctx.drawImage(previewImg, px - stoneRadius, py - stoneRadius, previewSize, previewSize);
-        ctx.restore();
-        
-        // Cercle clignotant autour pour indiquer qu'il faut cliquer à nouveau
-        ctx.strokeStyle = state.go.turn === 1 ? "#ffffff" : "#000000";
-        ctx.lineWidth = 2.5;
-        ctx.setLineDash([5, 5]);
-        ctx.beginPath();
-        ctx.arc(px, py, stoneRadius * 1.15, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    }
-    
-    // Pierre de prévisualisation au survol (seulement si pas de pierre en attente)
-    if (!state.pendingGoMove && goHover && state.go.inBounds(goHover.x, goHover.y) && !state.scoringMode) {
-      const illegal = state.go.whyIllegal(goHover.x, goHover.y);
-      const px = margin + goHover.x * cellSize;
-      const py = margin + goHover.y * cellSize;
-      
-      if (illegal) {
-        // Croix rouge pour coup illégal
-        ctx.globalAlpha = 0.6;
-        ctx.strokeStyle = "#cc0000";
-        ctx.lineWidth = 3;
-        const crossSize = stoneRadius * 0.6;
-        ctx.beginPath();
-        ctx.moveTo(px - crossSize, py - crossSize);
-        ctx.lineTo(px + crossSize, py + crossSize);
-        ctx.moveTo(px + crossSize, py - crossSize);
-        ctx.lineTo(px - crossSize, py + crossSize);
-        ctx.stroke();
-        ctx.globalAlpha = 1.0;
-      } else {
-        // Image très légère pour le survol
-        const previewImg = state.go.turn === 1 ? goBlackStone : goWhiteStone;
-        if (previewImg && previewImg.complete) {
-          ctx.save();
-          ctx.globalAlpha = 0.3;
-          const previewSize = stoneRadius * 2;
-          ctx.drawImage(previewImg, px - stoneRadius, py - stoneRadius, previewSize, previewSize);
-          ctx.restore();
-        }
-      }
-    }
-  }
-
-  function drawHoshiPoints(ctx, boardSize, margin, cellSize) {
-    let hoshi = [];
-    
-    if (boardSize === 19) {
-      hoshi = [3, 9, 15];
-    } else if (boardSize === 13) {
-      hoshi = [3, 6, 9];
-    } else if (boardSize === 9) {
-      hoshi = [4];
-    }
-    
-    const hoshiRadius = boardSize >= 19 ? 4 : 3.5;
-    
-    for (const x of hoshi) {
-      for (const y of hoshi) {
-        const px = margin + x * cellSize;
-        const py = margin + y * cellSize;
-        
-        // Point noir avec petit dégradé pour effet 3D
-        const grad = ctx.createRadialGradient(px - 0.5, py - 0.5, 0, px, py, hoshiRadius);
-        grad.addColorStop(0, "#2a2a2a");
-        grad.addColorStop(1, "#000000");
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(px, py, hoshiRadius, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-  }
-
-  function drawStone(ctx, px, py, radius, color) {
-    const stoneImg = color === 1 ? goBlackStone : goWhiteStone;
-    const size = radius * 2;
-    
-    if (stoneImg && stoneImg.complete) {
-      ctx.save();
-      ctx.drawImage(stoneImg, px - radius, py - radius, size, size);
-      ctx.restore();
-    }
-  }
-
-  function getGoCoords(event) {
-    const rect = goCanvas.getBoundingClientRect();
-    
-    // Position de la souris/doigt relative au canvas (en pixels d'affichage)
-    const mouseX = event.clientX - rect.left;
-    const mouseY = event.clientY - rect.top;
-    
-    // Taille du canvas à l'écran
-    const displayWidth = rect.width;
-    const displayHeight = rect.height;
-    
-    // Taille interne du canvas
-    const canvasWidth = goCanvas.width;
-    const canvasHeight = goCanvas.height;
-    
-    // Convertir les coordonnées d'affichage en coordonnées canvas internes
-    const x = (mouseX / displayWidth) * canvasWidth;
-    const y = (mouseY / displayHeight) * canvasHeight;
-    
-    // Paramètres de la grille (doivent correspondre à paintGo)
-    const boardSize = state.go.size;
-    const margin = canvasWidth * 0.07;
-    const cellSize = (canvasWidth - 2 * margin) / (boardSize - 1);
-    
-    // Calculer les coordonnées de grille brutes
-    const rawGx = (x - margin) / cellSize;
-    const rawGy = (y - margin) / cellSize;
-    
-    const gx = Math.round(rawGx);
-    const gy = Math.round(rawGy);
-    
-    // Zone tactile élargie pour mobile : tolérance augmentée
-    // Détection d'appareil tactile
-    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    const tolerance = isTouchDevice ? 0.45 : 0.35; // Plus tolérant sur tactile
-    
-    // Vérifier la distance à l'intersection la plus proche
-    const distX = Math.abs(rawGx - gx);
-    const distY = Math.abs(rawGy - gy);
-    
-    // Si trop loin de l'intersection, retourner des coordonnées invalides
-    if (distX > tolerance || distY > tolerance) {
-      return {x: -1, y: -1};
-    }
-    
-    return {x: gx, y: gy};
-  }
-
-  function onGoMove(event) {
-    // Enregistrer le moment du dernier mouvement de souris (anti-slip)
-    goLastMouseMove = Date.now();
-    
-    // Mettre à jour la prévisualisation
-    const coords = getGoCoords(event);
-    if (coords.x !== goHover?.x || coords.y !== goHover?.y) {
-      goHover = coords;
-      paintGo();
-    }
-  }
-
-  function onGoClick(event) {
-    const coords = getGoCoords(event);
-    
-    if (!state.go.inBounds(coords.x, coords.y)) return;
-    
-    // Anti-slip : rejeter si la souris/doigt a bougé récemment (si activé)
-    if (state.antiMisclickGo) {
-      // Utiliser le dernier mouvement détecté (souris ou tactile)
-      const lastMove = Math.max(goLastMouseMove, goLastTouchMove);
-      const timeSinceMove = Date.now() - lastMove;
-      
-      if (timeSinceMove < ANTI_SLIP_DELAY) {
-        sounds.refuse();
-        vibrateTouch(20); // Feedback tactile de refus
-        const waitTime = Math.ceil((ANTI_SLIP_DELAY - timeSinceMove) / 100) / 10;
-        setStatus(`⚠️ Mouvement détecté - attendez ${waitTime}s`, "err");
-        return;
-      }
-    }
-    
-    // Antimisclic : premier clic = prévisualisation, deuxième clic = confirmation (si activé)
-    if (state.antiMisclickGo) {
-      // Si on clique sur la pierre en attente, on confirme
-      if (state.pendingGoMove && 
-          state.pendingGoMove.x === coords.x && 
-          state.pendingGoMove.y === coords.y) {
-        
-        // Confirmer le coup
-        const success = state.go.play(coords.x, coords.y);
-        
-        if (success) {
-          applyLocalGoMove(coords);
-        } else {
-          sounds.refuse();
-          state.pendingGoMove = null;
-          paintGo();
-        }
-      } else {
-        // Nouveau clic : vérifier si légal et mettre en attente
-        const illegal = state.go.whyIllegal(coords.x, coords.y);
-        
-        if (illegal) {
-          sounds.refuse();
-          const reason = state.go.whyIllegal(coords.x, coords.y);
-          setStatus(reason || "Coup illégal", "err");
-          state.pendingGoMove = null;
-        } else {
-          // Mettre en attente (prévisualisation)
-          state.pendingGoMove = coords;
-          sounds.select(); // Son doux de sélection
-        }
-        
-        paintGo();
-      }
-    } else {
-      // Mode sans antimisclic (ancien comportement)
-      const success = state.go.play(coords.x, coords.y);
-      
-      if (success) {
-        applyLocalGoMove(coords);
-      } else {
-        sounds.refuse();
-        const reason = state.go.whyIllegal(coords.x, coords.y);
-        setStatus(reason || "Coup illégal", "err");
-      }
-    }
-  }
-
-  function applyLocalGoMove(coords) {
-    const playedSide = goPlayedSide();
-    state.goAnalysis = null;
-    if (state.handBrain && state.rengo) {
-      const hint = state.goHint[playedSide];
-      if (hint) {
-        const followed = goMoveMatchesHint(coords.x, coords.y, hint, state.lastGoMove);
-        const hintLabel = goHintLabel(hint);
-        setTimeout(() => {
-          setStatus(
-            followed
-              ? "✋ La main a suivi « " + hintLabel + " »"
-              : "✋ La main a joué ailleurs (la tête avait dit « " + hintLabel + " »)",
-            "ok"
-          );
-        }, 0);
-      }
-      state.goHint[playedSide] = null;
-    }
-    state.lastGoMove = coords;
-    state.pendingGoMove = null;
-    sounds.move();
-    advancePairSeat(playedSide);
-    paintGo();
-    updateGoStatus();
-    updateCaptureCounters();
-    if (clock.type !== "none") {
-      clock.switchPlayer();
-      updateClockDisplay();
-    }
-    if (net.connected()) {
-      net.send({ type: "go", x: coords.x, y: coords.y });
-    }
-  }
-
-  function updateGoStatus() {
-    if (state.go.over) {
-      const analysis = state.go.analyze();
-      const blackScore = analysis.jp[1];
-      const whiteScore = analysis.jp[2];
-      const winner = blackScore > whiteScore ? "Noir" : "Blanc";
-      setStatus("🏆 Partie terminée ! " + winner + " gagne - Noir: " + blackScore.toFixed(1) + ", Blanc: " + whiteScore.toFixed(1), "ok");
-    } else {
-      const turn = state.go.turn === 1 ? "● Trait au Noir" : "○ Trait au Blanc";
-      const statusClass = state.go.turn === 1 ? "black" : "white";
-      let text = turn;
-      if (state.rengo && state.handBrain) {
-        const side = goToMoveSide();
-        const hint = state.goHint[side];
-        if (!hint) {
-          text += " — 🧠 Tête (" + pairName(side, 0) + ") : choisissez une zone";
-        } else {
-          text += " — ✋ Main (" + pairName(side, 1) + ") : jouez (suggestion : " + goHintLabel(hint) + ")";
-        }
-      } else if (state.rengo) {
-        text += " — " + currentPairName(goToMoveSide());
-      }
-      setStatus(text, statusClass);
-    }
-    updatePairsUI();
-  }
-
-  function updateCaptureCounters() {
-    if (!el.captureCounters) return;
-    el.captureCounters.innerHTML = `
-      <div class="capture-count">
-        <span class="stone black"></span>
-        <span>Noir : ${state.go.captures[1]} captures</span>
-      </div>
-      <div class="capture-count">
-        <span class="stone white"></span>
-        <span>Blanc : ${state.go.captures[2]} captures</span>
-      </div>
-    `;
-  }
-
-  function startNewGo() {
-    const rawSize = parseInt(el.goSize.value, 10);
-    const size = [9, 13, 19].includes(rawSize) ? rawSize : 19;
-    const komi = window.SecurityManager
-      ? SecurityManager.clampNumber(el.komi.value, 0, 20, 6.5)
-      : 6.5;
-
-    state.go = new window.GoGame(size);
-    state.go.komi = komi;
-    state.lastGoMove = null;
-    state.pendingGoMove = null;
-    state.goHint = { w: null, b: null };
-    state.goAnalysis = null;
-    state.scoringMode = false;
-    goCanvas = null;
-    resetPairSeats();
-    renderGo();
-  }
 
   // Changer la taille du plateau
   if (el.goSize) {
@@ -1268,10 +815,55 @@ import { Chess } from "../vendor/chess.min.js";
 
   if (el.antiMisclickGoCheck) {
     el.antiMisclickGoCheck.addEventListener("change", (e) => {
+      // Legacy : anti-misclic = anti-glisse (1 clic), PAS le double-clic
+      const mode = e.target.checked ? "slip" : "direct";
+      state.goPlaceMode = mode;
       state.antiMisclickGo = e.target.checked;
-      setStatus(e.target.checked ? "✓ Anti-misclick Go activé" : "⚠️ Anti-misclick Go désactivé", e.target.checked ? "ok" : "err");
+      const sel = document.getElementById("goPlaceMode");
+      if (sel) sel.value = mode;
+      document.querySelectorAll("[data-place-mode]").forEach((btn) => {
+        btn.classList.toggle("on", btn.getAttribute("data-place-mode") === mode);
+      });
+      try { localStorage.setItem("sb-go-place-mode", mode); } catch (_) { /* ignore */ }
+      setStatus(e.target.checked ? "Pose : 1 clic + anti-glisse" : "Pose : 1 clic", "ok");
     });
   }
+
+  (function initGoPlaceMode() {
+    const labels = {
+      direct: "Pose : 1 clic",
+      slip: "Pose : 1 clic + anti-glisse (refus si glissement)",
+      confirm: "Pose : double confirmation"
+    };
+    function applyPlaceMode(v, announce) {
+      const mode = v === "slip" || v === "kgs" || v === "confirm"
+        ? (v === "kgs" ? "slip" : v)
+        : "direct";
+      state.goPlaceMode = mode;
+      state.antiMisclickGo = mode === "slip";
+      try { localStorage.setItem("sb-go-place-mode", mode); } catch (_) { /* ignore */ }
+      const sel = document.getElementById("goPlaceMode");
+      if (sel) sel.value = mode;
+      if (el.antiMisclickGoCheck) el.antiMisclickGoCheck.checked = state.antiMisclickGo;
+      document.querySelectorAll("[data-place-mode]").forEach((btn) => {
+        btn.classList.toggle("on", btn.getAttribute("data-place-mode") === mode);
+      });
+      if (announce) setStatus(labels[mode] || labels.direct, "ok");
+    }
+    let saved = null;
+    try { saved = localStorage.getItem("sb-go-place-mode"); } catch (_) { /* ignore */ }
+    applyPlaceMode(
+      saved === "direct" || saved === "slip" || saved === "kgs" || saved === "confirm" ? saved : "direct",
+      false
+    );
+    const sel = document.getElementById("goPlaceMode");
+    if (sel) {
+      sel.addEventListener("change", () => applyPlaceMode(sel.value, true));
+    }
+    document.querySelectorAll("[data-place-mode]").forEach((btn) => {
+      btn.addEventListener("click", () => applyPlaceMode(btn.getAttribute("data-place-mode"), true));
+    });
+  })();
 
   const renchessCheck = document.getElementById("renchessCheck");
   const rengoCheck = document.getElementById("rengoCheck");
@@ -1320,15 +912,20 @@ import { Chess } from "../vendor/chess.min.js";
   if (rengoCheck) {
     rengoCheck.addEventListener("change", (e) => {
       state.rengo = e.target.checked;
+      if (window.__sbRengoRoom) window.__sbRengoRoom.enable(!!state.rengo);
       if (!state.rengo) {
         state.handBrain = false;
         const hb = document.getElementById("handBrainCheck");
         if (hb) hb.checked = false;
         state.goHint = { w: null, b: null };
       }
+      const handBrainWrap = document.getElementById("handBrainWrap");
+      if (handBrainWrap) {
+        handBrainWrap.style.display = isHandBrainToggleVisible() ? "" : "none";
+      }
       resetPairSeats();
       updateGoStatus();
-      setStatus(e.target.checked ? "👥 Rengo activé (2 vs 2, alternance obligatoire)" : "Rengo désactivé", "ok");
+      setStatus(e.target.checked ? "👥 Rengo activé — choisissez un siège (4 joueurs)" : "Rengo désactivé", "ok");
     });
   }
   ["pairWA", "pairWB", "pairBA", "pairBB"].forEach((id) => {
@@ -1341,7 +938,7 @@ import { Chess } from "../vendor/chess.min.js";
     chessVariantSel.addEventListener("change", () => {
       const next = chessVariantSel.value;
       if (next === state.chessVariant) return;
-      if (state.chess.history().length > 0 || state.variantWinner) {
+      if ((state.chess && state.chess.history().length > 0) || state.variantWinner) {
         if (!confirm("Changer de variante relance une nouvelle partie. Continuer ?")) {
           chessVariantSel.value = state.chessVariant;
           return;
@@ -1354,31 +951,56 @@ import { Chess } from "../vendor/chess.min.js";
 
   // ========== CONTRÔLES ==========
 
+  /** Bind sûr : ne plante pas si l'élément est absent. */
+  function onEl(id, event, handler) {
+    const node = typeof id === "string" ? document.getElementById(id) : id;
+    if (!node) return false;
+    node.addEventListener(event, handler);
+    try { node.dataset.sbWired = "1"; } catch (_) { /* ignore */ }
+    return true;
+  }
+
   function switchGame(game) {
     state.game = game;
     state.selected = null;
     
-    el.btnChess.classList.toggle("on", game === "chess");
-    el.btnGo.classList.toggle("on", game === "go");
-    el.btnPass.style.display = game === "go" ? "" : "none";
-    el.goControls.style.display = game === "go" ? "flex" : "none";
-    el.captureCounters.style.display = game === "go" ? "flex" : "none";
-    el.btnScore.style.display = game === "go" ? "" : "none";
+    if (el.btnChess) el.btnChess.classList.toggle("on", game === "chess");
+    if (el.btnGo) el.btnGo.classList.toggle("on", game === "go");
+    if (el.btnPass) el.btnPass.style.display = game === "go" ? "" : "none";
+    if (el.goControls) el.goControls.style.display = game === "go" ? "flex" : "none";
+    if (el.captureCounters) el.captureCounters.style.display = game === "go" ? "flex" : "none";
+    if (el.btnScore) el.btnScore.style.display = game === "go" ? "" : "none";
+    const goBoardActions = document.getElementById("goBoardActions");
+    if (goBoardActions) goBoardActions.style.display = game === "go" ? "flex" : "none";
+    if (el.btnAnalyze && goBoardActions) {
+      /* Analyser reste visible aussi aux échecs (Stockfish) — hors barre Go */
+    }
     
     // Afficher/masquer les contrôles anti-misclick selon le jeu
-    el.antiMisclickChess.style.display = game === "chess" ? "" : "none";
-    el.antiMisclickGo.style.display = game === "go" ? "" : "none";
+    if (el.antiMisclickChess) el.antiMisclickChess.style.display = game === "chess" ? "" : "none";
+    if (el.antiMisclickGo) el.antiMisclickGo.style.display = game === "go" ? "" : "none";
     const chessVariantSel = document.getElementById("chessVariant");
-    if (chessVariantSel) chessVariantSel.style.display = game === "chess" ? "" : "none";
+    if (chessVariantSel && !document.body.classList.contains("app-shell")) {
+      chessVariantSel.style.display = game === "chess" ? "" : "none";
+    }
     const renchessWrap = document.getElementById("renchessWrap");
-    if (renchessWrap) renchessWrap.style.display = game === "chess" ? "" : "none";
+    if (renchessWrap && game === "chess") renchessWrap.style.display = "";
+    ["btnChessDraw", "btnChessRematch", "btnChessExportPgn", "btnChessTeaching"].forEach((id) => {
+      const btn = document.getElementById(id);
+      if (btn && game === "chess") btn.style.display = "";
+    });
     const handBrainWrap = document.getElementById("handBrainWrap");
     if (handBrainWrap) {
       handBrainWrap.style.display = isHandBrainToggleVisible() ? "" : "none";
     }
+    const identity = document.querySelector(".game-identity h1");
+    if (identity && identity.getAttribute("data-locked") !== "1") {
+      identity.textContent = game === "go" ? "Go" : "Échecs";
+    }
     updatePairsUI();
     render();
     updateVariantHud();
+    refreshRatingBadge();
   }
 
   function isPairsMode() {
@@ -1393,96 +1015,6 @@ import { Chess } from "../vendor/chess.min.js";
     return state.handBrain && isHandBrainToggleVisible();
   }
 
-  function goToMoveSide() {
-    return state.go.turn === 1 ? "b" : "w";
-  }
-
-  function goPlayedSide() {
-    return state.go.turn === 1 ? "w" : "b";
-  }
-
-  function goCornerDepth(size) {
-    if (size <= 9) return 3;
-    if (size <= 13) return 4;
-    return 6;
-  }
-
-  function classifyGoPoint(x, y, size) {
-    const d = goCornerDepth(size);
-    const nearX = x < d || x >= size - d;
-    const nearY = y < d || y >= size - d;
-    if (nearX && nearY) return "coin";
-    if (nearX || nearY) return "bord";
-    return "centre";
-  }
-
-  function isGoResponse(x, y, lastMove) {
-    if (!lastMove) return false;
-    const dist = Math.max(Math.abs(x - lastMove.x), Math.abs(y - lastMove.y));
-    return dist >= 1 && dist <= 2;
-  }
-
-  function goMoveMatchesHint(x, y, hint, lastMove) {
-    if (hint === "reponse") return isGoResponse(x, y, lastMove);
-    return classifyGoPoint(x, y, state.go.size) === hint;
-  }
-
-  function goHintLabel(type) {
-    const found = GO_HINTS.find((p) => p.type === type);
-    return found ? found.label : "";
-  }
-
-  function paintGoHintZones(ctx, boardSize, margin, cellSize, stoneRadius) {
-    if (!isHandBrainActive() || state.game !== "go") return;
-    const hint = state.goHint[goToMoveSide()];
-    if (!hint) return;
-    ctx.save();
-    ctx.globalAlpha = 0.22;
-    ctx.fillStyle = hint === "reponse" ? "#4a9eff" : "#2e7d32";
-    for (let y = 0; y < boardSize; y++) {
-      for (let x = 0; x < boardSize; x++) {
-        if (state.go.at(x, y) !== 0) continue;
-        if (!goMoveMatchesHint(x, y, hint, state.lastGoMove)) continue;
-        const px = margin + x * cellSize;
-        const py = margin + y * cellSize;
-        ctx.beginPath();
-        ctx.arc(px, py, stoneRadius * 0.28, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-    ctx.restore();
-  }
-
-  function paintGoAnalysisOverlay(ctx, boardSize, margin, cellSize, stoneRadius) {
-    const overlay = state.goAnalysis;
-    if (!overlay || !overlay.owner) return;
-    for (let y = 0; y < boardSize; y++) {
-      for (let x = 0; x < boardSize; x++) {
-        const px = margin + x * cellSize;
-        const py = margin + y * cellSize;
-        if (overlay.deadMap && overlay.deadMap[y][x]) {
-          ctx.save();
-          ctx.strokeStyle = "#c62828";
-          ctx.lineWidth = Math.max(2, stoneRadius * 0.28);
-          const s = stoneRadius * 0.45;
-          ctx.beginPath();
-          ctx.moveTo(px - s, py - s);
-          ctx.lineTo(px + s, py + s);
-          ctx.moveTo(px + s, py - s);
-          ctx.lineTo(px - s, py + s);
-          ctx.stroke();
-          ctx.restore();
-          continue;
-        }
-        if (state.go.at(x, y) !== 0) continue;
-        const who = overlay.owner[y][x];
-        if (!who) continue;
-        ctx.fillStyle = who === 1 ? "rgba(20, 20, 20, 0.38)" : "rgba(255, 255, 255, 0.62)";
-        const mark = stoneRadius * 0.36;
-        ctx.fillRect(px - mark / 2, py - mark / 2, mark, mark);
-      }
-    }
-  }
 
   function resetPairSeats() {
     state.pairSeat = { w: 0, b: 0 };
@@ -1508,35 +1040,6 @@ import { Chess } from "../vendor/chess.min.js";
     return (state.pairNames[side] && state.pairNames[side][seat]) || (seat === 0 ? "Tête" : "Main");
   }
 
-  function pieceHintLabel(type) {
-    const found = PIECE_HINTS.find((p) => p.type === type);
-    return found ? found.label : "";
-  }
-
-  function choosePieceHint(type) {
-    if (!state.handBrain || state.game !== "chess" || isChessVariantOver()) return;
-    const side = state.chess.turn();
-    state.pieceHint[side] = type;
-    sounds.select();
-    if (net.connected()) {
-      net.send({ type: "piece-hint", piece: type, color: side });
-    }
-    updateChessStatus();
-    renderChess();
-  }
-
-  function chooseGoHint(type) {
-    if (!isHandBrainActive() || state.game !== "go" || state.go.over) return;
-    if (!GO_HINTS.some((h) => h.type === type)) return;
-    const side = goToMoveSide();
-    state.goHint[side] = type;
-    sounds.select();
-    if (net.connected()) {
-      net.send({ type: "go-hint", zone: type, color: side });
-    }
-    updateGoStatus();
-    if (goCanvas) paintGo();
-  }
 
   function readPairNamesFromInputs() {
     const SM = window.SecurityManager;
@@ -1571,7 +1074,7 @@ import { Chess } from "../vendor/chess.min.js";
           : "Règle : les deux partenaires d’une couleur jouent à tour de rôle. On ne joue pas deux fois de suite pour son équipe.";
     }
     const toMove = state.game === "chess"
-      ? state.chess.turn()
+      ? (state.chess ? state.chess.turn() : "w")
       : goToMoveSide();
     document.querySelectorAll(".pairs-seat").forEach((seatEl) => {
       const side = seatEl.dataset.side;
@@ -1633,7 +1136,7 @@ import { Chess } from "../vendor/chess.min.js";
     if (panel) panel.style.display = showPanel ? "flex" : "none";
     if (!showPanel) return;
     ensureHandBrainButtons();
-    const side = state.game === "go" ? goToMoveSide() : state.chess.turn();
+    const side = state.game === "go" ? goToMoveSide() : (state.chess ? state.chess.turn() : "w");
     const tete = document.getElementById("hbTeteName");
     const main = document.getElementById("hbMainName");
     if (tete) tete.textContent = pairName(side, 0);
@@ -1668,14 +1171,31 @@ import { Chess } from "../vendor/chess.min.js";
     }
   }
 
+  function emitMovePlay(detail) {
+    window.dispatchEvent(new CustomEvent("movePlay", { detail: detail || {} }));
+    publishGameState(true);
+  }
+  window.__sbEmitMovePlay = emitMovePlay;
+
   function setStatus(text, type = "") {
     el.status.textContent = text;
     el.status.className = "status " + type;
   }
+  window.__sbSetStatus = setStatus;
 
   // Événements des boutons
-  el.btnChess.addEventListener("click", () => switchGame("chess"));
-  el.btnGo.addEventListener("click", () => switchGame("go"));
+  if (el.btnChess) {
+    el.btnChess.addEventListener("click", () => {
+      if (mods.chess) activate("chess");
+      else location.href = new URL("chess/", document.baseURI || location.href).href;
+    });
+  }
+  if (el.btnGo) {
+    el.btnGo.addEventListener("click", () => {
+      if (mods.go) activate("go");
+      else location.href = new URL("go/", document.baseURI || location.href).href;
+    });
+  }
   
   el.btnNew.addEventListener("click", () => {
     if (confirm("Commencer une nouvelle partie ?")) {
@@ -1724,88 +1244,148 @@ import { Chess } from "../vendor/chess.min.js";
     }
   });
 
-  el.btnPass.addEventListener("click", () => {
-    if (state.game === "go" && !state.go.over) {
-      const passSuccess = state.go.pass();
-      
-      if (passSuccess) {
-        const playedSide = goPlayedSide();
-        state.goAnalysis = null;
-        if (state.handBrain) state.goHint[playedSide] = null;
-        sounds.move();
-        advancePairSeat(playedSide);
-        
-        if (state.go.passCount === 1) {
-          setStatus("⚪ Pass ! Un joueur a passé son tour (1/2)", "ok");
-        } else if (state.go.over) {
-          setStatus("🏁 Partie terminée ! Deux pass consécutifs. Cliquez sur 'Score' pour voir le résultat.", "ok");
-        }
-        
-        // Changer l'horloge
-        if (clock.type !== "none") {
-          clock.switchPlayer();
-          updateClockDisplay();
-        }
-        
-        renderGo();
-        updateGoStatus();
-        
-        if (net.connected()) {
-          net.send({ type: "pass" });
-        }
+  function doGoPass() {
+    if (!mods.go || !state.go) {
+      setStatus("Partie Go non prête", "err");
+      return false;
+    }
+    if (state.game !== "go") switchGame("go");
+    if (state.go.over) {
+      setStatus("Partie terminée — utilisez Compter ou Nouvelle partie", "err");
+      return false;
+    }
+    if (state.scoringMode) {
+      setStatus("Mode comptage actif — passez via Done / Compter", "err");
+      return false;
+    }
+    if (state.matchMeta && state.matchMeta.observe) {
+      setStatus("Spectateur : lecture seule", "err");
+      return false;
+    }
+
+    const passSuccess = state.go.pass();
+    if (!passSuccess) {
+      setStatus("Impossible de passer", "err");
+      return false;
+    }
+
+    const playedSide = goPlayedSide();
+    state.goAnalysis = null;
+    if (state.handBrain) state.goHint[playedSide] = null;
+    if (sounds.pass) sounds.pass();
+    else if (sounds.stone) sounds.stone();
+    else sounds.move();
+    advancePairSeat(playedSide);
+
+    if (clock.type !== "none" && clock.isAuthority) {
+      clock.switchPlayer();
+      updateClockDisplay();
+    }
+
+    renderGo();
+    updateCaptureCounters();
+
+    if (state.go.over) {
+      setStatus("🏁 Double-pass — Compter, marquez les morts, puis Done", "ok");
+      if (mods.go.enterScoringMode) mods.go.enterScoringMode();
+    } else {
+      const next = state.go.turn === 1 ? "Noir" : "Blanc";
+      setStatus("Pass (1/2) — trait à " + next + ". Un 2ᵉ pass termine la partie.", "ok");
+    }
+
+    if (net.connected()) {
+      if (window.MatchProtocol) {
+        net.send(MatchProtocol.passPayload(state.go, clock));
+      } else {
+        net.send({ type: "pass" });
       }
     }
-  });
+    return true;
+  }
 
-  el.btnScore.addEventListener("click", () => {
-    if (state.go.over) {
-      const goAnalysis = analysis.analyzeGo(state.go);
-      state.goAnalysis = goAnalysis.raw;
-      paintGo();
-      showAnalysisPanel("Score final — Go", goAnalysis.details);
-    } else {
-      setStatus("Passez deux fois de suite pour terminer, puis comptez.", "err");
-    }
-  });
+  if (el.btnPass) {
+    el.btnPass.addEventListener("click", (e) => {
+      e.preventDefault();
+      doGoPass();
+    });
+  }
+
+  if (el.btnScore) {
+    el.btnScore.addEventListener("click", () => {
+      if (!state.go) {
+        setStatus("Partie Go non prête", "err");
+        return;
+      }
+      if (!state.go.over && state.go.passCount < 2) {
+        setStatus("Passez deux fois (bouton Passer sous le plateau) pour compter.", "err");
+        return;
+      }
+      if (!state.go.over) state.go.over = true;
+      try {
+        const raw = mods.go && mods.go.enterScoringMode
+          ? mods.go.enterScoringMode()
+          : state.go.analyze();
+        const goAnalysis = analysis.analyzeGo(state.go, { deadMap: raw.deadMap });
+        state.goAnalysis = goAnalysis.raw;
+        paintGo();
+        showAnalysisPanel("Score final — Go", goAnalysis.details);
+        setStatus("Mode comptage : cliquez les groupes morts/vivants, puis Done", "ok");
+      } catch (err) {
+        setStatus("Comptage impossible : " + ((err && err.message) || err), "err");
+      }
+    });
+  }
 
   el.btnResign.addEventListener("click", () => {
     if (confirm("Abandonner la partie ?")) {
       if (state.game === "chess") {
+        if (mods.chess && mods.chess.resignChess) {
+          mods.chess.resignChess(state.color || state.chess.turn());
+        }
         setStatus("Partie abandonnée", "err");
+        if (net.connected()) {
+          net.send({
+            type: "resign",
+            game: "chess",
+            color: state.color || "w",
+            fen: state.chess ? state.chess.fen() : null
+          });
+        }
       } else {
         state.go.resign(state.go.turn);
         updateGoStatus();
-      }
-      
-      if (net.connected()) {
-        net.send({ type: "resign" });
+        if (net.connected()) net.send({ type: "resign" });
       }
     }
   });
 
-  function uciToSquares(uci) {
-    if (!uci || uci.length < 4) return null;
-    return { from: uci.slice(0, 2), to: uci.slice(2, 4) };
-  }
+  document.getElementById("btnChessDraw")?.addEventListener("click", () => {
+    if (state.game !== "chess" || !mods.chess) return;
+    mods.chess.offerDraw();
+  });
 
-  function pvToSan(fen, uciMoves) {
-    try {
-      const tmp = new Chess();
-      if (!tmp.load(fen)) return (uciMoves || []).join(" ");
-      const sans = [];
-      (uciMoves || []).slice(0, 6).forEach((uci) => {
-        const moved = tmp.move({
-          from: uci.slice(0, 2),
-          to: uci.slice(2, 4),
-          promotion: uci[4] || "q"
-        });
-        if (moved) sans.push(moved.san);
-      });
-      return sans.join(" ") || (uciMoves || []).join(" ");
-    } catch (e) {
-      return (uciMoves || []).join(" ");
+  document.getElementById("btnChessRematch")?.addEventListener("click", () => {
+    if (state.game !== "chess") return;
+    startNewChess();
+    if (net.connected()) {
+      net.send({ type: "chess-rematch" });
+      sendChessStateSync();
     }
-  }
+    setStatus("Nouvelle partie (rematch)", "ok");
+  });
+
+  document.getElementById("btnChessExportPgn")?.addEventListener("click", () => {
+    if (!mods.chess || !mods.chess.exportPgn) return;
+    const pgn = mods.chess.exportPgn();
+    const blob = new Blob([pgn], { type: "text/plain;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "social-board-" + Date.now() + ".pgn";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setStatus("PGN exporté", "ok");
+  });
+
 
   function showAnalysisPanel(title, text) {
     const panel = document.getElementById("analysisPanel");
@@ -1816,41 +1396,96 @@ import { Chess } from "../vendor/chess.min.js";
     if (panel) panel.style.display = "block";
   }
 
-  el.btnAnalyze.addEventListener("click", () => {
-    if (state.game === "chess") {
-      setStatus("⏳ Analyse Stockfish en cours…", "");
-      const fen = state.chess.fen();
-      analysis.analyzeChess(fen, 16, (result) => {
-        if (result.error) {
-          setStatus("❌ " + result.error, "err");
-          showAnalysisPanel("Analyse échecs", result.error);
-          return;
-        }
-        state.analysisMove = uciToSquares(result.bestMove);
-        const bestSan = result.bestMove
-          ? pvToSan(fen, [result.bestMove])
-          : "?";
-        let message = "Évaluation (point de vue blancs) : " + (result.evaluation || "?") +
-          "\nMeilleur coup : " + bestSan;
-        if (result.lines && result.lines.length) {
-          message += "\n\nVariantes :";
-          result.lines.forEach((line, i) => {
-            message += "\n" + (i + 1) + ". " + pvToSan(fen, line.uci || line.moves.split(" ")) +
-              "  (" + line.eval + (line.depth ? " · p" + line.depth : "") + ")";
-          });
-        }
-        showAnalysisPanel("Analyse Stockfish", message);
-        renderChess();
-        setStatus("✅ Analyse terminée — " + (result.evaluation || "") + " · " + bestSan, "ok");
-      }, { side: state.chess.turn(), variant: state.chessVariant });
-    } else {
-      const goAnalysis = analysis.analyzeGo(state.go);
-      state.goAnalysis = goAnalysis.raw;
-      paintGo();
-      showAnalysisPanel("Analyse Go", goAnalysis.details);
-      setStatus("✅ Analyse Go — " + goAnalysis.score.winner, "ok");
+  function doGoAnalyze() {
+    if (!state.go) {
+      setStatus("Partie Go non prête", "err");
+      return;
     }
-  });
+    if (state.game !== "go") switchGame("go");
+    try {
+      setStatus("⏳ Analyse en cours…", "");
+      let body = "";
+      let title = "Analyse Go";
+      const goAnalysis = analysis.analyzeGo(
+        state.go,
+        state.goAnalysis && state.goAnalysis.deadMap
+          ? { deadMap: state.goAnalysis.deadMap }
+          : undefined
+      );
+      state.goAnalysis = goAnalysis.raw;
+      body = goAnalysis.details;
+      if (state.go.over || state.go.moves.length > 8) {
+        const review = analysis.reviewGo(state.go);
+        title = "Analyse de partie — Go";
+        body += "\n\n" + review.details;
+        if (review.sgf) body += "\n\nSGF :\n" + review.sgf;
+        setStatus(
+          "Analyse — " + goAnalysis.score.winner +
+            " · " + (review.swings ? review.swings.length : 0) + " pivots",
+          "ok"
+        );
+      } else {
+        setStatus(
+          "Analyse — N " + goAnalysis.score.black +
+            " / B " + goAnalysis.score.white +
+            " · " + goAnalysis.score.winner,
+          "ok"
+        );
+      }
+      paintGo();
+      showAnalysisPanel(title, body);
+      const panel = document.getElementById("analysisPanel");
+      if (panel && panel.scrollIntoView) {
+        panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    } catch (err) {
+      const msg = (err && err.message) ? err.message : String(err);
+      setStatus("Analyse impossible : " + msg, "err");
+      showAnalysisPanel("Analyse Go", "Erreur : " + msg);
+    }
+  }
+
+  if (el.btnAnalyze) {
+    el.btnAnalyze.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (state.game === "chess" && state.chess) {
+        setStatus("⏳ Analyse Stockfish en cours…", "");
+        const fen = state.chess.fen();
+        analysis.analyzeChess(fen, 16, (result) => {
+          if (result.error) {
+            setStatus("❌ " + result.error, "err");
+            showAnalysisPanel("Analyse échecs", result.error);
+            return;
+          }
+          state.analysisMove = uciToSquares(result.bestMove);
+          const bestSan = result.bestMove
+            ? pvToSan(fen, [result.bestMove])
+            : "?";
+          state.lastEval = {
+            score: result.evaluation || "?",
+            best: bestSan,
+            depth: result.depth || (result.lines && result.lines[0] && result.lines[0].depth) || "",
+            barPct: evalToBarPct(result.evaluation)
+          };
+          publishGameState(true);
+          let message = "Évaluation (point de vue blancs) : " + (result.evaluation || "?") +
+            "\nMeilleur coup : " + bestSan;
+          if (result.lines && result.lines.length) {
+            message += "\n\nVariantes :";
+            result.lines.forEach((line, i) => {
+              message += "\n" + (i + 1) + ". " + pvToSan(fen, line.uci || line.moves.split(" ")) +
+                "  (" + line.eval + (line.depth ? " · p" + line.depth : "") + ")";
+            });
+          }
+          showAnalysisPanel("Analyse Stockfish", message);
+          renderChess();
+          setStatus("✅ Analyse terminée — " + (result.evaluation || "") + " · " + bestSan, "ok");
+        }, { side: state.chess.turn(), variant: state.chessVariant });
+      } else {
+        doGoAnalyze();
+      }
+    });
+  }
 
   const btnCloseAnalysis = document.getElementById("btnCloseAnalysis");
   if (btnCloseAnalysis) {
@@ -1867,9 +1502,8 @@ import { Chess } from "../vendor/chess.min.js";
 
   if (el.btnHost) {
     el.btnHost.addEventListener("click", () => {
+      wireNetHandlers();
       net.init();
-      net.onStatus = setStatus;
-      net.onMessage = onNetMessage;
     });
   }
 
@@ -1885,9 +1519,30 @@ import { Chess } from "../vendor/chess.min.js";
     });
   }
 
+  function configureClockAuthority() {
+    const host = net.role === "host" || !net.connected();
+    clock.setAuthority(host);
+    if (host && clock.type !== "none") {
+      clock.onNeedSync = (snap) => {
+        if (net.connected() && window.MatchProtocol) {
+          net.send(MatchProtocol.clockSyncPayload(clock));
+        }
+      };
+      clock.startSyncBroadcast(1000);
+    } else {
+      clock.stopSyncBroadcast();
+      clock.onNeedSync = null;
+    }
+  }
+
   function onNetMessage(data) {
     if (!data || typeof data !== 'object') return;
     try {
+      if (window.__sbTeaching && window.__sbTeaching.handleNet(data)) return;
+      if (window.__sbChessTeaching && window.__sbChessTeaching.handleNet(data)) return;
+      if (goFeaturesApi && goFeaturesApi.handleNet(data)) return;
+      if (window.__sbRengoRoom && window.__sbRengoRoom.applyRemote(data)) return;
+
       if (data.type === "chess" && state.game === "chess") {
         applyChessVariantFromNet(data);
         if (data.reset) {
@@ -1899,32 +1554,132 @@ import { Chess } from "../vendor/chess.min.js";
           startNewChess({ fromNet: true });
           return;
         }
-        const applied = applyRemoteChessFen(data.fen);
+        if (data.checks) applyChecksFromNet(data.checks);
+        let applied = applyRemoteChessFen(data.fen);
+        if (!applied.ok && applied.needSync) {
+          // Demander un resync complet
+          if (net.role !== "host") net.send({ type: "request-sync", game: "chess" });
+          sounds.refuse();
+          setStatus("Désync — resynchronisation…", "err");
+          return;
+        }
         if (!applied.ok) {
           sounds.refuse();
           setStatus("Coup réseau refusé (position invalide)", "err");
           return;
         }
         if (applied.moved) {
-          if (state.handBrain) state.pieceHint[applied.move.color] = null;
-          advancePairSeat(applied.move.color);
-          applyVariantAfterMove(applied.move);
-          if (isChessVariantOver()) clock.stop();
+          const mv = applied.move || data.move;
+          if (state.handBrain && mv) state.pieceHint[mv.color] = null;
+          if (mv) advancePairSeat(mv.color);
+          if (mv && !applied.forced) applyVariantAfterMove(mv);
+          else if (data.checks) applyChecksFromNet(data.checks);
+          if (data.clock && window.MatchProtocol) MatchProtocol.applyClock(clock, data.clock);
+          else if (clock.type !== "none") {
+            clock.switchPlayer();
+            updateClockDisplay();
+          }
+          if (sounds.piece) sounds.piece();
+          else sounds.move();
+          if (state.chess && state.chess.in_check()) sounds.check();
+          if (isChessVariantOver()) {
+            clock.stop();
+            sounds.win();
+            if (mods.chess && mods.chess.maybeRecordChessResult) mods.chess.maybeRecordChessResult();
+          }
         }
         state.selected = null;
         state.pendingChessMove = null;
         renderChess();
+        updateChessStatus();
+        updateVariantHud();
+      } else if (data.type === "chess-color-assign") {
+        if (net.role === "host") {
+          state.color = data.hostColor === "b" ? "b" : "w";
+          state.hostColor = state.color;
+        } else {
+          state.color = data.guestColor === "b" ? "b" : "w";
+          state.hostColor = data.hostColor === "b" ? "b" : "w";
+        }
+        state.chessBoardFlipped = state.color === "b";
+        setStatus(state.color === "w" ? "Vous jouez les Blancs" : "Vous jouez les Noirs", "ok");
+        renderChess();
+        updateChessStatus();
+      } else if (data.type === "chess-draw-offer") {
+        if (confirm("L'adversaire propose la nulle. Accepter ?")) {
+          if (mods.chess && mods.chess.acceptDraw) mods.chess.acceptDraw();
+        }
+      } else if (data.type === "chess-draw-accept") {
+        state.chessDraw = true;
+        clock.stop();
+        setStatus("🤝 Nulle acceptée", "ok");
+        if (mods.chess && mods.chess.maybeRecordChessResult) mods.chess.maybeRecordChessResult();
+        updateChessStatus();
+        renderChess();
+      } else if (data.type === "chess-rematch") {
+        startNewChess({ fromNet: true });
+        setStatus("Rematch !", "ok");
+      } else if (data.type === "request-sync") {
+        if (net.role === "host" && net.connected()) {
+          if ((data.game === "chess" || state.game === "chess") && mods.chess) {
+            sendChessStateSync();
+          } else if (state.go && window.MatchProtocol) {
+            net.send(MatchProtocol.stateSyncPayload(state.go, clock));
+          }
+        }
+      } else if (data.type === "state-sync") {
+        if (data.game === "chess" || data.chess) {
+          if (data.chess) loadChessState(data.chess);
+          if (data.hostColor) state.hostColor = data.hostColor;
+          if (data.yourColor === "w" || data.yourColor === "b") {
+            state.color = data.yourColor;
+            state.chessBoardFlipped = state.color === "b";
+          } else if (net.role !== "host") {
+            state.color = (state.hostColor === "b") ? "w" : "b";
+            state.chessBoardFlipped = state.color === "b";
+          }
+          if (data.clock && window.MatchProtocol) MatchProtocol.applyClock(clock, data.clock);
+          renderChess();
+          updateChessStatus();
+          updateVariantHud();
+          setStatus("Plateau synchronisé", "ok");
+        } else if (data.state && state.go && window.MatchProtocol) {
+          // Go sync handled elsewhere (go-features) — fallback minimal
+        }
       } else if (data.type === "go" && state.game === "go") {
+        if (net.role === "observer") {
+          // observateur : appliquer sans vérif stricte
+        } else if (window.MatchProtocol && MatchProtocol.acceptRemoteGo) {
+          const check = MatchProtocol.acceptRemoteGo(state.go, data);
+          if (!check.ok) {
+            sounds.refuse();
+            setStatus("Coup Go refusé : " + (check.reason || "?"), "err");
+            if (check.needSync) net.send({ type: "request-sync" });
+            return;
+          }
+        }
         const played = state.go.play(data.x, data.y);
         if (!played) {
           sounds.refuse();
-          setStatus("Coup Go réseau refusé", "err");
+          setStatus("Coup Go réseau refusé — sync…", "err");
+          if (net.role !== "host") net.send({ type: "request-sync" });
           return;
+        }
+        if (data.hash && state.go.getBoardHash() !== data.hash) {
+          setStatus("Hash désync — demande d'état…", "err");
+          if (net.role !== "host") net.send({ type: "request-sync" });
         }
         const playedSide = goPlayedSide();
         if (state.handBrain) state.goHint[playedSide] = null;
         advancePairSeat(playedSide);
         state.lastGoMove = {x: data.x, y: data.y};
+        if (data.clock) MatchProtocol.applyClock(clock, data.clock);
+        else if (clock.type !== "none" && clock.isAuthority) {
+          clock.switchPlayer();
+          updateClockDisplay();
+        }
+        if (sounds.stone) sounds.stone();
+        else sounds.move();
         renderGo();
         updateGoStatus();
         updateCaptureCounters();
@@ -1933,8 +1688,16 @@ import { Chess } from "../vendor/chess.min.js";
         const playedSide = goPlayedSide();
         if (state.handBrain) state.goHint[playedSide] = null;
         advancePairSeat(playedSide);
+        if (data.clock) MatchProtocol.applyClock(clock, data.clock);
+        else if (clock.type !== "none" && clock.isAuthority) {
+          clock.switchPlayer();
+          updateClockDisplay();
+        }
         renderGo();
         updateGoStatus();
+        if (state.go.over && mods.go && mods.go.enterScoringMode) {
+          mods.go.enterScoringMode();
+        }
       } else if (data.type === "piece-hint") {
         if (data.color === "w" || data.color === "b") {
           state.pieceHint[data.color] = data.piece;
@@ -1948,13 +1711,15 @@ import { Chess } from "../vendor/chess.min.js";
           state.goHint[data.color] = data.zone;
           if (state.game === "go") {
             updateGoStatus();
-            if (goCanvas) paintGo();
+            paintGo();
           }
         }
       } else if (data.type === "resign") {
         setStatus("L'adversaire a abandonné !", "ok");
         if (state.game === "go") {
           state.go.resign(state.go.turn);
+        } else if (state.game === "chess" && mods.chess && mods.chess.resignChess) {
+          mods.chess.resignChess(data.color === "b" ? "b" : "w");
         }
       }
     } catch (error) {
@@ -1962,58 +1727,148 @@ import { Chess } from "../vendor/chess.min.js";
     }
   }
 
-  function normalizeFen(fen) {
-    return String(fen || '').split(' ').slice(0, 4).join(' ');
-  }
-
-  function applyRemoteChessFen(fen) {
-    if (typeof fen !== 'string' || fen.length > 128) return { ok: false };
-    try {
-      const next = new Chess();
-      if (!next.load(fen)) return { ok: false };
-      const target = normalizeFen(next.fen());
-      if (normalizeFen(state.chess.fen()) === target) {
-        return { ok: true, moved: false };
-      }
-      const moves = state.chess.moves({ verbose: true });
-      for (let i = 0; i < moves.length; i++) {
-        const clone = new Chess(state.chess.fen());
-        if (clone.move(moves[i]) && normalizeFen(clone.fen()) === target) {
-          state.chess.load(next.fen());
-          return { ok: true, moved: true, move: moves[i] };
-        }
-      }
-      return { ok: false };
-    } catch (e) {
-      return { ok: false };
-    }
-  }
 
   let lastCreatedInvitation = null;
 
-  // Surveiller l'ID de connexion
-  net.onReady = function () {
+  let pendingDiscordRoom = null;
+
+  // Surveiller l'ID de connexion + enregistrer une salle courte si API dispo
+  net.onReady = async function () {
+    if (pendingDiscordRoom && net.id && net.roomToken) {
+      const code = pendingDiscordRoom.code;
+      if (window.__sbLocalNet && typeof net.attachRoom === "function") {
+        net.attachRoom(code);
+      }
+      const peerId = window.__sbLocalNet ? ("local_" + code) : net.id;
+      const created = await rooms.create({
+        peerId: peerId,
+        token: net.roomToken,
+        game: pendingDiscordRoom.game,
+        code: code,
+        source: window.__sbLocalNet ? "discord-mock" : "discord"
+      });
+      if (created && created.code) {
+        shortRoomCode = created.code;
+        setStatus(window.__sbLocalNet
+          ? "Salle locale prête — le joueur B peut rejoindre"
+          : "Salle Discord prête — invitez un ami dans l'Activity", "ok");
+        if (window.DiscordActivity) DiscordActivity.setActivityStatus("En attente d'adversaire");
+      }
+      pendingDiscordRoom = null;
+    }
+    if (lastCreatedInvitation && net.id && net.roomToken) {
+      const created = await rooms.create({
+        peerId: net.id,
+        token: net.roomToken,
+        game: lastCreatedInvitation.gameType === "go" ? "go" : "chess"
+      });
+      if (created && created.code) shortRoomCode = created.code;
+    }
     if (el.inviteUrl && lastCreatedInvitation) {
       el.inviteUrl.value = generateInviteLink(lastCreatedInvitation);
     }
   };
 
-  // Rejoindre une partie si host dans l'URL
-  const params = new URLSearchParams(window.location.search);
-  const hostId = params.get("host");
-  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-  const roomToken = params.get("t") || hashParams.get("t");
-  if (hostId) {
+  /**
+   * Hook Discord Activity : hôte crée la PeerJS room avec code d'instance,
+   * invité rejoint dès que la salle API existe.
+   */
+  window.__sbStartDiscordMatch = async function (opts) {
+    const code = opts && opts.code;
+    const game = opts && opts.game === "go" ? "go" : "chess";
+    if (!code) return;
+
     state.mode = "online";
-    net.onStatus = setStatus;
-    net.onMessage = onNetMessage;
-    net.join(hostId, roomToken);
+    wireNetHandlers();
+    activate(game);
+
+    const localMock = !!window.__sbLocalNet;
+
+    if (opts.asHost) {
+      pendingDiscordRoom = { code: code, game: game };
+      net.init({ asHost: true });
+      if (localMock && typeof net.attachRoom === "function") {
+        net.attachRoom(code);
+      }
+      setStatus(localMock
+        ? "Hôte local — en attente du joueur B…"
+        : "Hôte Discord — partagez l'Activity dans le salon vocal", "ok");
+      return;
+    }
+
+    // Invité : poll jusqu'à ce que l'hôte enregistre la salle
+    setStatus("Recherche de la partie Discord…", "ok");
+    let resolved = null;
+    for (let i = 0; i < 40; i++) {
+      resolved = await rooms.resolve(code);
+      if (resolved) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!resolved) {
+      pendingDiscordRoom = { code: code, game: game };
+      net.init({ asHost: true });
+      if (localMock && typeof net.attachRoom === "function") net.attachRoom(code);
+      setStatus("Seul dans l'Activity — vous êtes hôte, invitez un adversaire", "ok");
+      return;
+    }
+    if (localMock) {
+      net.join("local_" + code, resolved.token);
+    } else {
+      net.join(resolved.peerId, resolved.token);
+    }
+    setStatus("Connexion à l'hôte…", "ok");
+    if (window.DiscordActivity) DiscordActivity.setActivityStatus("Partie en cours");
+  };
+
+  // Expose pour debug / UI
+  window.__sbGetNet = () => net;
+  window.__sbNetConnected = () => net.connected();
+
+  // Rejoindre une partie si host / room dans l'URL
+  const params = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const gameParam = params.get("g") || params.get("game");
+  if (gameParam === "go" || gameParam === "rengo") requestedGame = "go";
+  if (gameParam === "chess" || gameParam === "renchess") requestedGame = "chess";
+
+  async function joinFromUrl() {
+    // En mock Discord automatch, discord-match.js gère hôte/invité (évite le double join)
+    if (params.get("mock") === "1" && (params.get("automatch") === "1" || params.get("discord") === "1")) {
+      return;
+    }
+    let hostId = params.get("host");
+    let roomToken = params.get("t") || hashParams.get("t");
+    const roomCode = params.get("room");
+    if (roomCode && (!hostId || !roomToken)) {
+      const resolved = await rooms.resolve(roomCode);
+      if (resolved) {
+        hostId = resolved.peerId;
+        roomToken = resolved.token;
+        if (resolved.game === "go") requestedGame = "go";
+        if (resolved.game === "chess") requestedGame = "chess";
+      } else {
+        setStatus("Salle introuvable ou expirée", "err");
+      }
+    }
+    const wantObserve = params.get("observe") === "1" || params.get("watch") === "1";
+    if (wantObserve) {
+      state.matchMeta = state.matchMeta || {};
+      state.matchMeta.observe = true;
+      document.body.classList.add("spectator-mode");
+    }
+    if (hostId) {
+      state.mode = "online";
+      wireNetHandlers();
+      const joinOpts = wantObserve ? { observe: true } : {};
+      if (window.__sbLocalNet && roomCode) {
+        net.join("local_" + roomCode, roomToken, joinOpts);
+      } else {
+        net.join(hostId, roomToken, joinOpts);
+      }
+      if (wantObserve) setStatus("Mode spectateur — lecture seule", "ok");
+    }
   }
-  
-  const gameParam = params.get("g");
-  if (gameParam === "go") {
-    switchGame("go");
-  }
+  joinFromUrl();
 
   // ========== PLATEFORMES SOCIALES ==========
 
@@ -2064,40 +1919,164 @@ import { Chess } from "../vendor/chess.min.js";
     'rapid15': { type: 'fischer', minutes: 15, increment: 10 },
     'classical30': { type: 'simple', minutes: 30 },
     'classical45': { type: 'fischer', minutes: 45, increment: 45 },
-    // Go
+    // Go — cadences (bullet / blitz / rapide / classique)
+    'go-none': { type: 'none' },
+    'go-bullet1': { type: 'byoyomi', mainMinutes: 1, byoyomiSeconds: 10, periods: 5 },
+    'go-bullet3': { type: 'byoyomi', mainMinutes: 3, byoyomiSeconds: 20, periods: 3 },
+    'go-blitz5': { type: 'byoyomi', mainMinutes: 5, byoyomiSeconds: 20, periods: 3 },
+    'go-blitz5abs': { type: 'simple', minutes: 5 },
+    'go-rapid10': { type: 'byoyomi', mainMinutes: 10, byoyomiSeconds: 30, periods: 3 },
+    'go-rapid15': { type: 'byoyomi', mainMinutes: 15, byoyomiSeconds: 30, periods: 5 },
+    'go-classical20': { type: 'byoyomi', mainMinutes: 20, byoyomiSeconds: 30, periods: 5 },
+    'go-classical30': { type: 'byoyomi', mainMinutes: 30, byoyomiSeconds: 30, periods: 5 },
+    'go-classical45': { type: 'byoyomi', mainMinutes: 45, byoyomiSeconds: 60, periods: 5 },
+    'go-abs20': { type: 'simple', minutes: 20 },
+    'go-abs60': { type: 'simple', minutes: 60 },
+    'go-canadian': { type: 'canadian', mainMinutes: 30, periodMinutes: 5, stones: 25 },
+    // alias anciens ids
     'go-quick': { type: 'byoyomi', mainMinutes: 10, byoyomiSeconds: 30, periods: 3 },
+    'go-std20': { type: 'byoyomi', mainMinutes: 20, byoyomiSeconds: 30, periods: 5 },
     'go-standard': { type: 'byoyomi', mainMinutes: 20, byoyomiSeconds: 30, periods: 5 },
+    'go-std30': { type: 'byoyomi', mainMinutes: 30, byoyomiSeconds: 30, periods: 5 },
     'go-long': { type: 'byoyomi', mainMinutes: 45, byoyomiSeconds: 60, periods: 5 },
-    'go-canadian': { type: 'canadian', mainMinutes: 30, periodMinutes: 5, stones: 25 }
+    'go-igs': { type: 'canadian', mainMinutes: 10, periodMinutes: 8, stones: 20 }
   };
+
+  let lastByoyomiBeep = [0, 0];
   
   function updateClockDisplay() {
+    if (!el.clockWhite || !el.clockBlack) return;
     const clockState = clock.getState();
     
-    // Afficher les temps
     el.clockWhite.querySelector('.clock-time').textContent = clockState.times[0];
     el.clockBlack.querySelector('.clock-time').textContent = clockState.times[1];
     
-    // Afficher les infos supplémentaires
     el.clockWhite.querySelector('.clock-extra').textContent = clockState.extras[0];
     el.clockBlack.querySelector('.clock-extra').textContent = clockState.extras[1];
     
-    // Mettre en surbrillance le joueur actif
     el.clockWhite.classList.toggle('active', clockState.currentPlayer === 0 && clockState.running);
     el.clockBlack.classList.toggle('active', clockState.currentPlayer === 1 && clockState.running);
     
-    // Alerte temps faible (< 20 secondes)
     const whiteTime = clock.mainTime[0];
     const blackTime = clock.mainTime[1];
     el.clockWhite.classList.toggle('low-time', whiteTime < 20000 && whiteTime > 0);
     el.clockBlack.classList.toggle('low-time', blackTime < 20000 && blackTime > 0);
+
+    // Tick byoyomi discret sous 10 s (sans stridence)
+    if (clock.type === "byoyomi" && clock.running) {
+      const p = clock.currentPlayer;
+      if (clock.inByoyomi[p] && clock.mainTime[p] <= 10000) {
+        const sec = Math.ceil(clock.mainTime[p] / 1000);
+        if (sec !== lastByoyomiBeep[p] && sec > 0 && sec <= 10) {
+          lastByoyomiBeep[p] = sec;
+          if (sounds.byoyomiTick) sounds.byoyomiTick(sec <= 3);
+        }
+      }
+    }
+    publishGameState();
   }
+
+  /** Snapshot pour overlays Broadcast / OBS / spectateurs locaux. */
+  function collectBroadcastSnapshot() {
+    const clockState = clock.getState ? clock.getState() : { times: ["--:--", "--:--"], currentPlayer: 0, running: false };
+    const viewers = (net && typeof net.observerCount === "function") ? net.observerCount() : 0;
+    const snap = {
+      game: state.game,
+      clockWhite: clockState.times[0],
+      clockBlack: clockState.times[1],
+      clockActive: clockState.running ? (clockState.currentPlayer === 0 ? "w" : "b") : null,
+      viewers: viewers,
+      whiteName: (state.pairNames && state.pairNames.w && state.pairNames.w[0]) || "Blanc",
+      blackName: (state.pairNames && state.pairNames.b && state.pairNames.b[0]) || "Noir",
+      whiteRating: "",
+      blackRating: "",
+      statusText: (el.status && el.status.textContent) || "",
+      liveTitle: state.game === "go" ? "🔴 LIVE Go" : "🔴 LIVE Échecs"
+    };
+    if (window.RatingSystem) {
+      try {
+        const info = RatingSystem.displayFor(currentUserId(), state.game === "chess" ? "chess" : "go");
+        if (state.color === "b") snap.blackRating = info.label;
+        else snap.whiteRating = info.label;
+      } catch (_) { /* ignore */ }
+    }
+    if (state.game === "chess" && state.chess) {
+      snap.fen = state.chess.fen();
+      const hist = state.chess.history ? state.chess.history() : [];
+      const moves = [];
+      for (let i = 0; i < hist.length; i += 2) {
+        const n = Math.floor(i / 2) + 1;
+        moves.push(n + ". " + hist[i] + (hist[i + 1] ? " " + hist[i + 1] : ""));
+      }
+      snap.moves = moves;
+      snap.lastMoveSan = state.lastMove && state.lastMove.san ? state.lastMove.san : (hist[hist.length - 1] || "");
+      if (state.lastEval) {
+        snap.evalScore = state.lastEval.score;
+        snap.evalBest = state.lastEval.best;
+        snap.evalDepth = state.lastEval.depth;
+        snap.evalBarPct = state.lastEval.barPct;
+      }
+    } else if (state.game === "go" && state.go) {
+      snap.moves = [];
+      if (state.go.moves && state.go.moves.length) {
+        snap.moves = state.go.moves.slice(-30).map((m, i) => {
+          if (!m || m.pass) return (i + 1) + ". pass";
+          return (i + 1) + ". " + (m.x >= 0 ? String.fromCharCode(65 + m.x) + (state.go.size - m.y) : "pass");
+        });
+      }
+      if (state.lastGoMove) {
+        snap.lastMoveSan = state.lastGoMove.x != null
+          ? String.fromCharCode(65 + state.lastGoMove.x) + (state.go.size - state.lastGoMove.y)
+          : "pass";
+      }
+      snap.captured = {
+        whiteText: " capt. " + ((state.go.captures && state.go.captures[2]) || 0),
+        blackText: " capt. " + ((state.go.captures && state.go.captures[1]) || 0)
+      };
+    }
+    return snap;
+  }
+
+  function evalToBarPct(evaluation) {
+    if (evaluation == null) return 50;
+    const s = String(evaluation);
+    if (/mate/i.test(s)) return /-/i.test(s) ? 8 : 92;
+    const n = parseFloat(s.replace(/^\+/, ""));
+    if (!Number.isFinite(n)) return 50;
+    // map ~[-5, +5] → [10, 90]
+    const clamped = Math.max(-5, Math.min(5, n));
+    return 50 + clamped * 8;
+  }
+
+  let _lastPublishAt = 0;
+  let _lastPublishKey = "";
+  function publishGameState(force) {
+    const now = Date.now();
+    if (!force && now - _lastPublishAt < 200) return;
+    const snap = collectBroadcastSnapshot();
+    const key = (snap.fen || "") + "|" + snap.lastMoveSan + "|" + snap.clockWhite + "|" + snap.clockBlack + "|" + snap.viewers;
+    if (!force && key === _lastPublishKey) return;
+    _lastPublishKey = key;
+    _lastPublishAt = now;
+    if (window.Broadcast) Broadcast.applyGameState(snap);
+    else if (window.streamOverlay && streamOverlay.applyGameState) streamOverlay.applyGameState(snap);
+    window.dispatchEvent(new CustomEvent("sb:game-state", { detail: snap }));
+  }
+  window.__sbPublishGameState = publishGameState;
   
   function applyClockConfig() {
     const type = el.clockType.value;
     
     clock.reset();
+    lastByoyomiBeep = [0, 0];
     
+    if (type === "none") {
+      clock.type = "none";
+      el.clockDisplay.style.display = "none";
+      el.clockModal.style.display = "none";
+      setStatus("⏱️ Horloge désactivée (correspondance / sans limite)", "ok");
+      return;
+    }
     if (type === "simple") {
       const minutes = parseFloat(document.getElementById("simpleMinutes").value);
       clock.setupSimple(minutes);
@@ -2120,24 +2099,58 @@ import { Chess } from "../vendor/chess.min.js";
     el.clockDisplay.style.display = "flex";
     updateClockDisplay();
     
-    // Démarrer l'horloge pour le bon joueur
-    const startPlayer = (state.game === "chess") ? 
-      (state.chess.turn() === 'w' ? 0 : 1) : 
-      (state.go.turn === 1 ? 0 : 1);
+    const startPlayer = (state.game === "chess")
+      ? (state.chess && state.chess.turn() === "w" ? 0 : 1)
+      : (state.go && state.go.turn === 1 ? 1 : 0); // Go : Noir = index 1
+    configureClockAuthority();
     clock.start(startPlayer);
     
     el.clockModal.style.display = "none";
     
     const typeNames = {
-      'simple': 'Simple',
+      'simple': 'Absolute',
       'fischer': 'Fischer',
       'byoyomi': 'Byoyomi',
       'canadian': 'Canadienne'
     };
-    setStatus(`✓ Horloge ${typeNames[type]} activée`, "ok");
+    setStatus(`✓ Horloge ${typeNames[type] || type} activée`, "ok");
+  }
+
+  function filterClockPresets() {
+    const isGo = state.game === "go";
+    document.querySelectorAll(".preset-btn").forEach((btn) => {
+      const id = btn.getAttribute("data-preset") || "";
+      const goPreset = id.indexOf("go-") === 0;
+      btn.style.display = (isGo ? goPreset : !goPreset) ? "" : "none";
+    });
+    if (el.clockType) {
+      // Préférer byoyomi pour le Go
+      if (isGo && el.clockType.value === "fischer") el.clockType.value = "byoyomi";
+      el.clockType.dispatchEvent(new Event("change"));
+    }
   }
   
   el.btnClock.addEventListener("click", () => {
+    filterClockPresets();
+    if (el.clockModal) {
+      el.clockModal.classList.toggle("clock-for-go", state.game === "go");
+      el.clockModal.classList.toggle("clock-for-chess", state.game !== "go");
+      const title = el.clockModal.querySelector("h3");
+      if (title) {
+        title.textContent = state.game === "go"
+          ? "⏱️ Horloge Go"
+          : "⏱️ Configuration de l'horloge";
+      }
+      const hint = document.getElementById("goClockHint");
+      if (hint) hint.style.display = state.game === "go" ? "" : "none";
+      const customDiv = document.getElementById("clockCustomDivider");
+      if (customDiv) customDiv.style.display = state.game === "go" ? "" : "none";
+      const adv = document.getElementById("clockAdvancedWrap");
+      if (adv) {
+        if (adv.tagName === "DETAILS") adv.open = true;
+        adv.style.display = "";
+      }
+    }
     el.clockModal.style.display = "flex";
   });
   
@@ -2146,11 +2159,11 @@ import { Chess } from "../vendor/chess.min.js";
   });
   
   // Bouton désactiver horloge
-  document.getElementById("btnDisableClock").addEventListener("click", () => {
+  onEl("btnDisableClock", "click", () => {
     clock.reset();
     clock.type = "none";
-    el.clockDisplay.style.display = "none";
-    el.clockModal.style.display = "none";
+    if (el.clockDisplay) el.clockDisplay.style.display = "none";
+    if (el.clockModal) el.clockModal.style.display = "none";
     setStatus("⏱️ Horloge désactivée", "ok");
   });
   
@@ -2162,7 +2175,11 @@ import { Chess } from "../vendor/chess.min.js";
       
       if (!preset) return;
       
-      // Appliquer le preset
+      if (preset.type === "none") {
+        el.clockType.value = "none";
+        applyClockConfig();
+        return;
+      }
       el.clockType.value = preset.type;
       el.clockType.dispatchEvent(new Event('change'));
       
@@ -2181,20 +2198,26 @@ import { Chess } from "../vendor/chess.min.js";
         document.getElementById("canadianStones").value = preset.stones;
       }
       
-      // Appliquer immédiatement
       applyClockConfig();
     });
   });
   
   el.clockType.addEventListener("change", (e) => {
-    // Afficher les bons champs selon le type
     document.getElementById("clockConfigSimple").style.display = e.target.value === "simple" ? "block" : "none";
     document.getElementById("clockConfigFischer").style.display = e.target.value === "fischer" ? "block" : "none";
     document.getElementById("clockConfigByoyomi").style.display = e.target.value === "byoyomi" ? "block" : "none";
     document.getElementById("clockConfigCanadian").style.display = e.target.value === "canadian" ? "block" : "none";
   });
   
-  el.btnClockOk.addEventListener("click", applyClockConfig);
+  if (el.btnClockOk) el.btnClockOk.addEventListener("click", applyClockConfig);
+
+  // Modules Go/Échecs AVANT les invitations — sinon une erreur UI bloque SGF/Teaching/Rengo…
+  try {
+    await bootModules();
+  } catch (err) {
+    console.error("bootModules", err);
+    setStatus("Erreur au chargement des modules : " + ((err && err.message) || err), "err");
+  }
 
   // ========== INVITATIONS ==========
   
@@ -2204,8 +2227,10 @@ import { Chess } from "../vendor/chess.min.js";
   // Afficher une notification
   function showNotification(text, type = 'info') {
     const notif = document.getElementById('inviteNotification');
+    if (!notif) return;
     const content = notif.querySelector('.notification-content');
     const textEl = document.getElementById('notificationText');
+    if (!content || !textEl) return;
     
     textEl.textContent = text;
     content.className = 'notification-content ' + type;
@@ -2217,12 +2242,13 @@ import { Chess } from "../vendor/chess.min.js";
     }, 5000);
   }
   
-  document.getElementById('btnCloseNotif').addEventListener('click', () => {
-    document.getElementById('inviteNotification').style.display = 'none';
+  onEl('btnCloseNotif', 'click', () => {
+    const n = document.getElementById('inviteNotification');
+    if (n) n.style.display = 'none';
   });
   
   // Créer et envoyer une invitation
-  document.getElementById('btnInvite').addEventListener('click', () => {
+  onEl('btnInvite', 'click', () => {
     if (!auth.isLoggedIn()) {
       showNotification('Vous devez être connecté pour inviter quelqu\'un', 'error');
       document.getElementById('loginModal').style.display = 'flex';
@@ -2245,8 +2271,7 @@ import { Chess } from "../vendor/chess.min.js";
     
     if (result.success) {
       lastCreatedInvitation = result.invitation;
-      net.onStatus = setStatus;
-      net.onMessage = onNetMessage;
+      wireNetHandlers();
       net.init({ asHost: true });
       const inviteLink = generateInviteLink(result.invitation);
       document.getElementById('inviteUrl').value = inviteLink;
@@ -2269,20 +2294,25 @@ import { Chess } from "../vendor/chess.min.js";
       ? SecurityManager.parseClockConfig(invitation.clockConfig)
       : { type: 'none' };
     url.searchParams.set('clock', JSON.stringify(clockSafe));
-    if (net.id) url.searchParams.set('host', net.id);
-    url.searchParams.set('g', invitation.gameType === 'go' ? 'go' : 'chess');
-    if (net.roomToken) url.hash = 't=' + net.roomToken;
+    if (shortRoomCode) {
+      url.searchParams.set('room', shortRoomCode);
+    } else {
+      if (net.id) url.searchParams.set('host', net.id);
+      if (net.roomToken) url.hash = 't=' + net.roomToken;
+    }
     if (state.handBrain) url.searchParams.set('hb', '1');
     return url.toString();
   }
   
   // Copier le lien d'invitation
-  document.getElementById('btnCopy').addEventListener('click', () => {
+  onEl('btnCopy', 'click', () => {
     const inviteUrl = document.getElementById('inviteUrl');
-    if (inviteUrl.value) {
+    if (inviteUrl && inviteUrl.value) {
       inviteUrl.select();
       document.execCommand('copy');
       showNotification('✓ Lien copié dans le presse-papiers !', 'success');
+    } else {
+      showNotification('Créez d\'abord une invitation', 'warning');
     }
   });
   
@@ -2296,8 +2326,9 @@ import { Chess } from "../vendor/chess.min.js";
   };
   
   Object.entries(shareButtons).forEach(([btnId, platformName]) => {
-    document.getElementById(btnId).addEventListener('click', () => {
-      const inviteUrl = document.getElementById('inviteUrl').value;
+    onEl(btnId, 'click', () => {
+      const inviteUrlEl = document.getElementById('inviteUrl');
+      const inviteUrl = inviteUrlEl ? inviteUrlEl.value : '';
       if (!inviteUrl) {
         showNotification('Créez d\'abord une invitation !', 'warning');
         return;
@@ -2424,13 +2455,12 @@ import { Chess } from "../vendor/chess.min.js";
   }
   
   // Accepter l'invitation
-  document.getElementById('btnAcceptInvite').addEventListener('click', () => {
+  onEl('btnAcceptInvite', 'click', () => {
     if (!currentInvitation) return;
     
     document.getElementById('invitationModal').style.display = 'none';
     
     // Appliquer la configuration du jeu
-    switchGame(currentInvitation.gameType);
     state.rengo = currentInvitation.pairsFormat === 'rengo';
     state.renchess = currentInvitation.pairsFormat === 'renchess' ||
       (!!currentInvitation.handBrain && currentInvitation.gameType === 'chess');
@@ -2441,6 +2471,7 @@ import { Chess } from "../vendor/chess.min.js";
     if (rengoBox) rengoBox.checked = state.rengo;
     if (renchessBox) renchessBox.checked = state.renchess;
     if (hbBox) hbBox.checked = state.handBrain;
+    activate(currentInvitation.gameType);
     resetPairSeats();
     
     // Appliquer la configuration de l'horloge
@@ -2468,14 +2499,14 @@ import { Chess } from "../vendor/chess.min.js";
   });
   
   // Refuser l'invitation
-  document.getElementById('btnRejectInvite').addEventListener('click', () => {
+  onEl('btnRejectInvite', 'click', () => {
     document.getElementById('invitationModal').style.display = 'none';
     showNotification('Invitation refusée', 'info');
     currentInvitation = null;
   });
   
   // Ouvrir le modal de contre-proposition
-  document.getElementById('btnCounterInvite').addEventListener('click', () => {
+  onEl('btnCounterInvite', 'click', () => {
     if (!currentInvitation) return;
     
     document.getElementById('invitationModal').style.display = 'none';
@@ -2499,7 +2530,7 @@ import { Chess } from "../vendor/chess.min.js";
   });
   
   // Envoyer la contre-proposition
-  document.getElementById('btnSendCounter').addEventListener('click', () => {
+  onEl('btnSendCounter', 'click', () => {
     if (!selectedCounterClock) {
       showNotification('Veuillez choisir un timing', 'warning');
       return;
@@ -2521,72 +2552,118 @@ import { Chess } from "../vendor/chess.min.js";
   });
   
   // Annuler la contre-proposition
-  document.getElementById('btnCancelCounter').addEventListener('click', () => {
-    document.getElementById('counterModal').style.display = 'none';
+  onEl('btnCancelCounter', 'click', () => {
+    const cm = document.getElementById('counterModal');
+    if (cm) cm.style.display = 'none';
     selectedCounterClock = null;
     // Revenir à l'invitation
     if (currentInvitation) {
-      document.getElementById('invitationModal').style.display = 'flex';
+      const im = document.getElementById('invitationModal');
+      if (im) im.style.display = 'flex';
     }
   });
 
-  // Démarrage initial
-  switchGame("chess");
+  // Mock Discord : anti-misclick off pour tester les coups plus vite
+  try {
+    if (new URLSearchParams(location.search).get("mock") === "1") {
+      state.antiMisclickGo = false;
+      state.antiMisclickChess = false;
+      const goBox = document.getElementById("antiMisclickGoCheck");
+      const chBox = document.getElementById("antiMisclickChessCheck");
+      if (goBox) goBox.checked = false;
+      if (chBox) chBox.checked = false;
+    }
+  } catch (_) { /* ignore */ }
+
+  // Si le match Discord a démarré trop tôt, relancer maintenant que le hook existe
+  if (window.DiscordActivity && DiscordActivity.ready) {
+    document.dispatchEvent(new CustomEvent("discord:ready", { detail: DiscordActivity }));
+  }
+
+  // === BROADCAST / OBS (une seule source de binding : Broadcast.bindUi) ===
+  const bindBtn = (id, fn) => {
+    const node = document.getElementById(id);
+    if (node) node.addEventListener("click", fn);
+  };
+
+  if (window.Broadcast) {
+    Broadcast.onAfterToggle = () => publishGameState(true);
+    Broadcast.bindUi();
+  }
+  publishGameState(true);
+
+  window.addEventListener("movePlay", (event) => {
+    if (window.discordIntegration && window.discordIntegration.isStreaming) {
+      window.discordIntegration.commentMove(event.detail, state.game);
+    }
+    if (window.Broadcast && Broadcast.timeline.recording) {
+      Broadcast.timeline.push("move", event.detail || {});
+    }
+  });
 
   // === SYSTÈME DE COMMENTAIRES DISCORD ===
-  
-  // Initialiser le système de commentaires si Discord est disponible
   if (window.discordIntegration) {
     window.discordIntegration.initCommentarySystem();
-    
-    // Définir l'utilisateur actuel
-    const username = auth.getUser()?.username || 'Invité';
+    const username = auth.getUser()?.username || "Invité";
     window.discordIntegration.setCurrentUser(username, false);
-    
-    // Quand l'utilisateur se connecte, mettre à jour
-    window.addEventListener('userLogin', (event) => {
+
+    window.addEventListener("userLogin", (event) => {
       if (event.detail.username) {
         window.discordIntegration.setCurrentUser(event.detail.username, false);
       }
     });
 
-    // Écouter les commentaires entrants (pour les spectateurs)
-    window.addEventListener('commentReceived', (event) => {
-      const comment = event.detail;
-      window.discordIntegration.receiveComment(comment);
+    window.addEventListener("commentReceived", (event) => {
+      window.discordIntegration.receiveComment(event.detail);
     });
-    
+
     const startStream = () => {
       window.discordIntegration.startStream(state.game);
       const user = auth.getUser();
-      window.discordIntegration.setCurrentUser(user?.username || 'Invité', true);
-      const commentaryPanel = document.getElementById('commentaryPanel');
-      if (commentaryPanel) commentaryPanel.style.display = 'block';
-      setStatus('🔴 Stream démarré ! Les spectateurs peuvent vous rejoindre.', 'ok');
+      window.discordIntegration.setCurrentUser(user?.username || "Invité", true);
+      const commentaryPanel = document.getElementById("commentaryPanel");
+      if (commentaryPanel) commentaryPanel.style.display = "block";
+      if (window.Broadcast) {
+        const key = Broadcast.startLocalStream(state.game);
+        window.discordIntegration.streamKey = key;
+        Broadcast.copyWatchLink();
+      }
+      publishGameState(true);
+      setStatus("🔴 Broadcast démarré — lien Watch/OBS dans le presse-papier", "ok");
     };
 
     const stopStream = () => {
       window.discordIntegration.stopStream();
+      if (window.Broadcast) Broadcast.stopLocalStream();
       const user = auth.getUser();
-      window.discordIntegration.setCurrentUser(user?.username || 'Invité', false);
-      setStatus('⏹️ Stream arrêté.', 'ok');
+      window.discordIntegration.setCurrentUser(user?.username || "Invité", false);
+      setStatus("⏹️ Stream arrêté.", "ok");
     };
 
-    const bind = (id, fn) => {
-      const node = document.getElementById(id);
-      if (node) node.addEventListener('click', fn);
-    };
-
-    bind('btnStartDiscordStream', startStream);
-    bind('btnStreamStop', stopStream);
-    bind('btnCopyStreamUrl', () => window.discordIntegration.copyStreamURL());
-    bind('btnLeaveSpectator', () => window.discordIntegration.leaveSpectatorMode());
-
-    window.addEventListener('movePlay', (event) => {
-      if (window.discordIntegration.isStreaming) {
-        window.discordIntegration.commentMove(event.detail, state.game);
-      }
+    bindBtn("btnStartDiscordStream", startStream);
+    bindBtn("btnStreamStop", stopStream);
+    bindBtn("btnCopyStreamUrl", () => {
+      if (window.Broadcast) Broadcast.copyWatchLink();
+      else window.discordIntegration.copyStreamURL();
+    });
+    bindBtn("btnLeaveSpectator", () => {
+      window.discordIntegration.leaveSpectatorMode();
+      document.body.classList.remove("spectator-mode");
     });
   }
-  
+
+  // Marquer les boutons déjà branchés par les modules (évite faux « mort »)
+  [
+    "btnPass", "btnAnalyze", "btnScore", "btnScoreDone", "btnResign", "btnNew",
+    "btnClock", "btnSgfExport", "btnSgfImport", "btnUndoPass", "btnApplyGoSetup",
+    "btnKataGo", "btnTeaching", "btnReview", "btnAutomatch", "btnBroadcast",
+    "btnObsLink", "btnWatchLink", "btnLessonRecord", "btnWebcamToggle",
+    "btnInvite", "btnCopy", "btnLogin", "btnLogout"
+  ].forEach((id) => {
+    const n = document.getElementById(id);
+    if (n) {
+      try { n.dataset.sbWired = "1"; } catch (_) { /* ignore */ }
+    }
+  });
+
 })();

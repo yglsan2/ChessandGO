@@ -1,0 +1,25 @@
+Board sounds — licences / crédits
+=================================
+
+Go — pose de pierre
+  Source : Online-Go.com (https://github.com/online-go/online-go.com)
+  Pack : zz-un-original-2013 (« Original (2013) »)
+  Enregistrements : mlopezviedma
+  Réutilisation : autorisée explicitement par mlopezviedma
+    (https://github.com/jkk/shinkgs/issues/25#issuecomment-420714449)
+  Fichiers locaux : sounds/go/stone/stone1.wav … stone5.wav
+  Note : le dossier assets/ d’OGS n’est pas sous AGPL ; chaque asset
+  a sa propre autorisation — ici, permission d’usage des clics pierre.
+
+Go — capture / passe
+  Source : Online-Go.com pack zz-un-effects
+  Segments : capture-1, pass
+  Réutilisation : OK pour les effets non-voix (anoek / OGS)
+  Fichiers : sounds/go/fx/capture.wav, sounds/go/pass.mp3
+
+Go — refus (anti-glisse / coup illégal)
+  Fichier : sounds/go/fx/refuse.wav
+  Synthèse originale (domaine public / usage libre)
+  Inspiration comportementale : CGoban 3 joue bell.au via Defs.ringBell()
+  quand l’anti-skid refuse un clic (< ~250 ms après entrée souris).
+  Les assets CGoban 3 / KGS sont propriétaires — non redistribués ici.

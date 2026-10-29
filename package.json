@@ -1,0 +1,22 @@
+{
+  "name": "social-board",
+  "version": "1.2.0",
+  "description": "Échecs et Go jouables en local, en ligne et en Discord Activity",
+  "private": true,
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "test": "node tests/test-analysis.js && node tests/test-chess-sync.js && node tests/test-broadcast.js && node tests/smoke-publish.js",
+    "assets": "python tools/make-share-image.py",
+    "build:discord-sdk": "esbuild node_modules/@discord/embedded-app-sdk/output/index.mjs --bundle --format=iife --global-name=DiscordEmbeddedAppSdk --outfile=vendor/discord-embedded-app-sdk.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@discord/embedded-app-sdk": "^2.5.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

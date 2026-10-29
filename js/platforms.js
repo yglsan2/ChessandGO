@@ -142,9 +142,10 @@ class Platforms {
     
     this.adaptInterface('discord');
     
-    if (window.DiscordSDK) {
+    const discordId = (window.CONFIG && window.CONFIG.discord && window.CONFIG.discord.clientId) || '';
+    if (window.DiscordSDK && discordId && typeof window.DiscordSDK.init === 'function') {
       window.DiscordSDK.init({
-        clientId: 'YOUR_DISCORD_CLIENT_ID', // À remplacer
+        clientId: discordId,
         scope: ['activities.read', 'activities.write']
       })
         .then(() => {
@@ -157,7 +158,9 @@ class Platforms {
           this.initialized = true; // Continuer en mode dégradé
         });
     } else {
-      console.log('ℹ️ Discord SDK non détecté, mode web standard');
+      console.log(discordId
+        ? 'ℹ️ Discord SDK non détecté, mode web standard'
+        : 'ℹ️ Discord clientId non configuré');
       this.initialized = true;
     }
   }
@@ -251,7 +254,9 @@ class Platforms {
   updateMetaTags(platform) {
     const title = 'Social Board - Échecs & Go';
     const description = 'Jouez aux échecs et au Go avec vos amis sur tous les réseaux sociaux !';
-    const image = window.location.origin + '/images/share.png'; // À créer
+    const image = (window.CONFIG && window.CONFIG.shareImageUrl)
+      ? window.CONFIG.shareImageUrl()
+      : (window.location.origin + '/images/share.png');
     
     const metaTags = {
       // Open Graph (Facebook, WhatsApp, etc.)

@@ -4,7 +4,7 @@ const path = require("path");
 const vm = require("vm");
 
 const root = path.join(__dirname, "..");
-const goSrc = fs.readFileSync(path.join(root, "js", "go.js"), "utf8");
+const goSrc = fs.readFileSync(path.join(root, "go", "js", "engine.js"), "utf8");
 const sandbox = { window: {}, console };
 vm.runInNewContext(goSrc, sandbox);
 const GoGame = sandbox.window.GoGame;

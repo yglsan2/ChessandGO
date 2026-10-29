@@ -111,6 +111,7 @@ class StreamOverlay {
     on('btnPreviewStream', 'click', () => this.showOverlay());
     on('btnExportStreamConfig', 'click', () => this.exportConfig());
     on('btnApplyStreamConfig', 'click', () => {
+      this.readConfigFromPanel();
       this.applyConfig(this.overlayConfig);
       this.closeConfigPanel();
     });
@@ -129,6 +130,19 @@ class StreamOverlay {
         btn.classList.add('active');
         this.applyLayout(btn.dataset.layout);
       });
+    });
+
+    // Cases à cocher : appliquer immédiatement (pas seulement au clic Appliquer)
+    const liveApply = () => {
+      this.readConfigFromPanel();
+      this.refreshOverlay();
+      this.saveConfig();
+    };
+    Object.keys(this.overlayConfig.enabledWidgets || {}).forEach((id) => {
+      on(`widget-${id}-enabled`, 'change', liveApply);
+    });
+    Object.keys(this.overlayConfig.boardDisplay || {}).forEach((key) => {
+      on(`board-${key}`, 'change', liveApply);
     });
   }
   
@@ -360,6 +374,135 @@ class StreamOverlay {
     `;
   }
   
+  // === LIVE DATA (branché sur l'état réel via Broadcast / app) ===
+
+  applyGameState(snap) {
+    if (!snap || typeof snap !== "object") return;
+    const info = {
+      blackName: snap.blackName || "Noir",
+      whiteName: snap.whiteName || "Blanc",
+      blackRating: snap.blackRating != null ? String(snap.blackRating) : "—",
+      whiteRating: snap.whiteRating != null ? String(snap.whiteRating) : "—"
+    };
+    this.updatePlayerInfo(info);
+    this.updateClock({
+      black: snap.clockBlack || "--:--",
+      white: snap.clockWhite || "--:--",
+      active: snap.clockActive || null
+    });
+    if (snap.evalScore != null || snap.evalBest) {
+      this.updateEvaluation({
+        score: snap.evalScore != null ? snap.evalScore : "—",
+        depth: snap.evalDepth || "",
+        bestMove: snap.evalBest || "—",
+        barPct: snap.evalBarPct
+      });
+    }
+    if (Array.isArray(snap.moves)) this.updateMoveList(snap.moves);
+    if (snap.lastMoveSan || snap.lastMove) {
+      this.updateLastMove(snap.lastMoveSan || snap.lastMove);
+    }
+    if (snap.captured) this.updateCapturedPieces(snap.captured);
+    this.updateStreamInfo({
+      title: snap.liveTitle || (snap.game === "go" ? "🔴 LIVE Go" : "🔴 LIVE Échecs"),
+      viewers: snap.viewers,
+      status: snap.statusText
+    });
+    // Rebrancher webcam si stream actif
+    if (window.Broadcast && Broadcast.webcamStream) {
+      const video = document.getElementById("webcamVideo");
+      if (video && video.srcObject !== Broadcast.webcamStream) {
+        video.srcObject = Broadcast.webcamStream;
+        video.play().catch(() => {});
+        const ph = video.parentElement && video.parentElement.querySelector(".webcam-placeholder");
+        if (ph) ph.style.display = "none";
+      }
+    }
+  }
+
+  updatePlayerInfo(data) {
+    data = data || {};
+    const set = (id, v) => {
+      const n = document.getElementById(id);
+      if (n && v != null) n.textContent = v;
+    };
+    set("player1Name", data.blackName);
+    set("player1Rating", data.blackRating);
+    set("player2Name", data.whiteName);
+    set("player2Rating", data.whiteRating);
+  }
+
+  updateClock(data) {
+    data = data || {};
+    const setTime = (id, text, active) => {
+      const root = document.getElementById(id);
+      if (!root) return;
+      const t = root.querySelector(".clock-time");
+      if (t && text != null) t.textContent = text;
+      root.classList.toggle("active", !!active);
+    };
+    setTime("overlayClockBlack", data.black, data.active === "b" || data.active === 1);
+    setTime("overlayClockWhite", data.white, data.active === "w" || data.active === 0);
+  }
+
+  updateEvaluation(data) {
+    data = data || {};
+    const score = document.getElementById("evalScore");
+    const depth = document.getElementById("evalDepth");
+    const best = document.getElementById("evalBestMove");
+    const fill = document.getElementById("evalBarFill");
+    if (score && data.score != null) score.textContent = data.score;
+    if (depth) depth.textContent = data.depth ? "Profondeur: " + data.depth : "";
+    if (best && data.bestMove != null) best.textContent = "Meilleur: " + data.bestMove;
+    if (fill && data.barPct != null) {
+      const pct = Math.max(2, Math.min(98, Number(data.barPct) || 50));
+      fill.style.height = pct + "%";
+    }
+  }
+
+  updateMoveList(moves) {
+    const box = document.getElementById("moveListContent");
+    if (!box) return;
+    box.textContent = "";
+    const list = Array.isArray(moves) ? moves.slice(-24) : [];
+    list.forEach((m, i) => {
+      const row = document.createElement("div");
+      row.className = "move-item" + (i === list.length - 1 ? " current" : "");
+      row.textContent = typeof m === "string" ? m : String(m.san || m);
+      box.appendChild(row);
+    });
+    box.scrollTop = box.scrollHeight;
+  }
+
+  updateCapturedPieces(data) {
+    data = data || {};
+    const set = (id, text) => {
+      const n = document.getElementById(id);
+      if (n) n.textContent = text || "";
+    };
+    set("capturedWhite", data.whiteText || "");
+    set("capturedBlack", data.blackText || "");
+    set("materialWhite", data.whiteDiff != null ? data.whiteDiff : "");
+    set("materialBlack", data.blackDiff != null ? data.blackDiff : "");
+  }
+
+  updateLastMove(text) {
+    const n = document.getElementById("lastMoveText");
+    if (n) n.textContent = text || "—";
+  }
+
+  updateStreamInfo(data) {
+    data = data || {};
+    const title = document.getElementById("streamTitle");
+    const viewers = document.getElementById("streamViewers");
+    if (title && data.title) title.textContent = data.title;
+    if (viewers && data.viewers != null) viewers.textContent = "👁️ " + data.viewers + " spectateurs";
+  }
+
+  updateChat(data) {
+    /* optionnel — messages injectés via commentary */
+  }
+
   // === LAYOUTS PRÉDÉFINIS ===
   
   applyLayout(layoutName) {
@@ -681,6 +824,41 @@ class StreamOverlay {
         }
       }
     }
+
+    const si = this.overlayConfig.streamerInfo || {};
+    const setVal = (id, v) => {
+      const n = document.getElementById(id);
+      if (n) n.value = v || "";
+    };
+    setVal("streamer-name", si.name);
+    setVal("streamer-title", si.title);
+    setVal("streamer-twitch", si.social && si.social.twitch);
+    setVal("streamer-youtube", si.social && si.social.youtube);
+    setVal("streamer-twitter", si.social && si.social.twitter);
+  }
+
+  readConfigFromPanel() {
+    for (const id of Object.keys(this.overlayConfig.enabledWidgets)) {
+      const checkbox = document.getElementById(`widget-${id}-enabled`);
+      if (checkbox) this.overlayConfig.enabledWidgets[id] = !!checkbox.checked;
+    }
+    for (const key of Object.keys(this.overlayConfig.boardDisplay)) {
+      const input = document.getElementById(`board-${key}`);
+      if (!input) continue;
+      if (input.type === "checkbox") this.overlayConfig.boardDisplay[key] = !!input.checked;
+      else this.overlayConfig.boardDisplay[key] = String(input.value || "").slice(0, 40);
+    }
+    const si = this.overlayConfig.streamerInfo;
+    const cut = (id, n) => {
+      const el = document.getElementById(id);
+      return el ? String(el.value || "").slice(0, n) : "";
+    };
+    si.name = cut("streamer-name", 40);
+    si.title = cut("streamer-title", 80);
+    si.social = si.social || {};
+    si.social.twitch = cut("streamer-twitch", 40);
+    si.social.youtube = cut("streamer-youtube", 40);
+    si.social.twitter = cut("streamer-twitter", 40);
   }
   
   applyConfig(config) {

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Guide — Social Board</title>
+  <link rel="stylesheet" href="../css/hub.css" />
+  <style>
+    .guide-body { max-width: 40rem; }
+    .guide-body h2 {
+      font-family: var(--font-display);
+      font-size: 1.35rem;
+      margin: 1.6rem 0 0.5rem;
+      color: var(--hub-accent);
+    }
+    .guide-body ol, .guide-body ul { color: var(--hub-muted); line-height: 1.55; }
+    .guide-body code {
+      background: rgba(0,0,0,0.35);
+      padding: 2px 6px;
+      border-radius: 6px;
+      font-size: 0.85em;
+    }
+    .guide-body a { color: #7dcbad; }
+  </style>
+</head>
+<body class="hub-page">
+  <div class="hub guide-body">
+    <div class="hub-top">
+      <a class="hub-brand" href="../">Social Board<span>Guide</span></a>
+      <a class="hub-link" href="../discord/test.html?game=chess">Mock Échecs</a>
+    </div>
+    <h1 style="font-family:var(--font-display);font-size:2rem;margin:0 0 12px;">Comment utiliser l’app</h1>
+    <p style="color:var(--hub-muted);">Jouer en 1v1 Discord + filmer / enseigner les échecs et le Go. Pas un site de tournois.</p>
+
+    <h2>1. Choisir le jeu</h2>
+    <ol>
+      <li>Ouvrez le <a href="../">hub</a>.</li>
+      <li>Cliquez <strong>Échecs</strong> ou <strong>Go</strong> → Jouer / Teaching / Vidéo.</li>
+    </ol>
+
+    <h2>2. 1v1 Discord</h2>
+    <ol>
+      <li>Test local : <a href="../discord/test.html">mock Go</a> ou <a href="../discord/test.html?game=chess">mock Échecs</a>.</li>
+      <li>Activity réelle : <a href="../discord/">lanceur Discord</a> (HTTPS + Client ID requis — voir <code>docs/DISCORD.md</code>).</li>
+      <li>Échecs : hôte = <strong>Blancs</strong>, invité = <strong>Noirs</strong>.</li>
+      <li>Go : hôte = <strong>Noir</strong>, invité = <strong>Blanc</strong>.</li>
+    </ol>
+
+    <h2>3. Filmer (OBS / YouTube)</h2>
+    <ol>
+      <li>Onglet <strong>Vidéo</strong> → Broadcast / OBS.</li>
+      <li>Copiez <strong>Lien OBS</strong> → Browser Source (fond transparent).</li>
+      <li>Optionnel : Webcam, Timeline leçon (export JSON pour le montage).</li>
+      <li>Spectateur distant : <strong>Lien Watch</strong> (PeerJS <code>observe=1</code>) après une partie connectée.</li>
+    </ol>
+
+    <h2>4. Teaching</h2>
+    <ul>
+      <li>Échecs : Classroom (expliquer / essayer / proposer), flèches, PGN.</li>
+      <li>Go : Take Control, marques, leçons, SGF, quiz.</li>
+    </ul>
+
+    <p style="margin-top:2rem;"><a class="hub-link" href="../">← Retour au hub</a></p>
+  </div>
+</body>
+</html>

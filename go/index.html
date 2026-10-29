@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <base href="../" />
+  <script src="go/boot.js"></script>
+  <meta charset="UTF-8" />
+  
+  <!-- Sécurité (frame-ancestors autorise Discord Activities) -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; connect-src 'self' wss: https: https://discord.com https://*.discord.com https://cdn.discordapp.com; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://discord.com https://*.discord.com;" />
+  <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+  <meta http-equiv="X-XSS-Protection" content="1; mode=block" />
+  <meta name="referrer" content="strict-origin-when-cross-origin" />
+  
+  <!-- Mobile-First Viewport -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, minimal-ui" />
+  
+  <!-- Theme & Colors -->
+  <meta name="theme-color" content="#1a1d2e" />
+  <meta name="msapplication-navbutton-color" content="#1a1d2e" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  
+  <!-- PWA -->
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Social Board" />
+  <meta name="application-name" content="Social Board" />
+  
+  <!-- Title & Description -->
+  <title>Social Board — Go</title>
+  <meta name="description" content="Jouez aux échecs et au Go avec vos amis sur mobile ! Tactile optimisé, horloges professionnelles, anti-misclick." />
+  
+  <!-- Open Graph / Social -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Social Board — Go" />
+  <meta property="og:description" content="Jouez au Go avec vos amis sur mobile !" />
+  <meta property="og:site_name" content="Social Board" />
+  <meta property="og:image" content="images/share.png" />
+  
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Social Board — Go" />
+  <meta name="twitter:description" content="Jouez au Go sur mobile avec interface tactile optimisée !" />
+  <meta name="twitter:image" content="images/share.png" />
+  <meta name="sb:discord-client-id" content="" />
+  <meta name="sb:telegram-bot" content="" />
+  <meta name="sb:telegram-app" content="" />
+  <meta name="sb:facebook-app-id" content="" />
+  
+  <!-- Preload -->
+  <link rel="preload" as="style" href="css/app-mobile.css" />
+  
+  <!-- Styles (Mobile-First) -->
+  <link rel="stylesheet" href="css/app-mobile.css" />
+  <link rel="stylesheet" href="css/stream-overlay.css" />
+  <link rel="stylesheet" href="css/hub.css" />
+  
+  <!-- Prevent zoom on input focus (iOS) -->
+  <style>
+    input, select, textarea {
+      font-size: 16px !important;
+    }
+  </style>
+</head>
+<body class="app-shell">
+  <!-- Discord & Stream Overlays -->
+  <div id="streamOverlay" class="stream-overlay-container"></div>
+  
+  <!-- Barre de streaming (masquée par défaut) -->
+  <div id="streamingBar" class="stream-control-bar" style="display: none;">
+    <div id="streamStatus">🔴 LIVE</div>
+    <button type="button" id="btnStreamConfig" class="stream-control-btn btn-config-stream">
+      ⚙️ Configurer
+    </button>
+    <button type="button" id="btnStreamEdit" class="stream-control-btn btn-edit-overlay">
+      ✏️ Éditer Layout
+    </button>
+    <button type="button" id="btnStreamStop" class="stream-control-btn btn-stop-stream">
+      ⏹️ Arrêter Stream
+    </button>
+  </div>
+  
+  <!-- Barre spectateur (masquée par défaut) -->
+  <div id="spectatorBar" class="stream-control-bar" style="display: none;">
+    <div>👁️ Mode Spectateur</div>
+    <button type="button" id="btnLeaveSpectator" class="stream-control-btn btn-secondary">
+      👋 Quitter
+    </button>
+  </div>
+  <header class="app-topbar">
+    <a class="brand-back" href="./">← Accueil</a>
+    <div class="game-identity">
+      <h1 data-locked="1">Go</h1>
+      <div class="game-tag">Social Board</div>
+      <p id="moduleBadge" class="module-badge"></p>
+    </div>
+    <div class="switch" id="gameSwitch" hidden>
+      <button id="btnChess" type="button">Échecs</button>
+      <button id="btnGo" class="on" type="button">Go</button>
+    </div>
+    <div class="user-info">
+      <span id="userRating" class="user-rating" title="Classement">—</span>
+      <div id="userDisplay" style="display:none;">
+        <div class="user-avatar" id="userAvatar"></div>
+        <span id="userName"></span>
+        <button id="btnLogout" type="button" class="small-btn">Déconnexion</button>
+      </div>
+      <button id="btnLogin" type="button">Connexion</button>
+    </div>
+  </header>
+
+  <nav class="action-tabs" aria-label="Modes">
+    <button type="button" data-panel="play" class="on">Partie</button>
+    <button type="button" data-panel="teach">Teaching</button>
+    <button type="button" data-panel="video">Vidéo</button>
+    <button type="button" data-panel="more">Réglages</button>
+  </nav>
+
+  <div id="panel-play" class="controls controls-panel is-open">
+    <p class="panel-hint">Partie — pose, passer, horloge, compter</p>
+    <button id="btnNew" type="button" class="primary">Nouvelle partie</button>
+    <button id="btnClock" type="button">⏱️ Horloge</button>
+    <label class="sound-inline"><input id="soundOnPlay" type="checkbox" checked /> Sons</label>
+    <label class="sound-inline" title="Volume"><input id="soundVolumePlay" type="range" min="0" max="1" step="0.05" value="0.62" style="width:72px;vertical-align:middle;" /></label>
+    <div class="place-mode-group sound-style-group" role="group" aria-label="Style des sons" title="Nuances = pierres vivantes ; Franc = même clic + misclic">
+      <span class="place-mode-caption">Timbre</span>
+      <button type="button" data-sound-style="varied" class="place-mode-btn on" title="Plusieurs clics pierre + légère variation de hauteur — comme un vrai goban">Nuances</button>
+      <button type="button" data-sound-style="fixed" class="place-mode-btn" title="Toujours le même clic pierre, plus le son de misclic — repère net">Franc</button>
+    </div>
+    <div class="place-mode-group" role="group" aria-label="Mode de pose des pierres" title="Comment poser les pierres">
+      <span class="place-mode-caption">Pose</span>
+      <button type="button" data-place-mode="direct" class="place-mode-btn on" title="Un seul clic pose la pierre">1 clic</button>
+      <button type="button" data-place-mode="slip" class="place-mode-btn" title="1 clic : refuse si vous glissez (son de refus)">Anti-glisse</button>
+      <button type="button" data-place-mode="confirm" class="place-mode-btn" title="Mode séparé : recliquer pour confirmer">2 clics</button>
+      <select id="goPlaceMode" class="sr-only" aria-hidden="true" tabindex="-1">
+        <option value="direct" selected>1 clic</option>
+        <option value="slip">1 clic + anti-glisse</option>
+        <option value="confirm">Double confirmation</option>
+      </select>
+    </div>
+    <button id="btnSgfExport" type="button">SGF ↓</button>
+    <button id="btnResign" type="button" class="danger">Abandonner</button>
+  </div>
+
+  <div id="panel-teach" class="controls controls-panel">
+    <p class="panel-hint">Teaching — Take Control, leçons, quiz, export SGF</p>
+    <button id="btnTeaching" type="button" class="primary teach-btn">Ouvrir Teaching</button>
+    <button id="btnReview" type="button">Review</button>
+    <button id="btnKataGo" type="button">KataGo</button>
+  </div>
+
+  <div id="panel-video" class="controls controls-panel">
+    <p class="panel-hint">Pour YouTube / Twitch / OBS — plateau clean + overlays</p>
+  </div>
+
+  <div id="panel-more" class="controls controls-panel">
+    <p class="panel-hint">Setup goban, sons, options</p>
+    <label><input id="soundOn" type="checkbox" checked /> Sons</label>
+    <label title="Volume des sons"><input id="soundVolume" type="range" min="0" max="1" step="0.05" value="0.62" style="width:72px;vertical-align:middle;" /></label>
+    <div class="place-mode-group sound-style-group" role="group" aria-label="Style des sons">
+      <span class="place-mode-caption">Timbre</span>
+      <button type="button" data-sound-style="varied" class="place-mode-btn on" title="Plusieurs clics pierre + légère variation de hauteur — comme un vrai goban">Nuances</button>
+      <button type="button" data-sound-style="fixed" class="place-mode-btn" title="Toujours le même clic pierre, plus le son de misclic — repère net">Franc</button>
+    </div>
+    <label id="antiMisclickChess" style="display:none;"><input id="antiMisclickChessCheck" type="checkbox" checked /> Anti-misclick</label>
+    <label id="antiMisclickGo" style="display:none;"><input id="antiMisclickGoCheck" type="checkbox" /> Anti-misclick (legacy)</label>
+    <div id="goControls" style="display:flex;flex-wrap:wrap;gap:8px;">
+      <select id="goSize">
+        <option value="9">9×9</option>
+        <option value="13">13×13</option>
+        <option value="19" selected>19×19</option>
+      </select>
+      <input id="komi" type="number" step="0.5" value="6.5" style="width:70px;" placeholder="Komi" />
+      <select id="goHandicap" title="Handicap">
+        <option value="0">H0</option>
+        <option value="2">H2</option>
+        <option value="3">H3</option>
+        <option value="4">H4</option>
+        <option value="5">H5</option>
+        <option value="6">H6</option>
+        <option value="7">H7</option>
+        <option value="8">H8</option>
+        <option value="9">H9</option>
+      </select>
+      <select id="goRules" title="Règles">
+        <option value="japanese">Japonaises</option>
+        <option value="chinese">Chinoises</option>
+        <option value="aga">AGA</option>
+        <option value="nz">New Zealand</option>
+      </select>
+      <select id="goColorChoice" title="Couleur">
+        <option value="nigiri">Nigiri</option>
+        <option value="black">Hôte Noir</option>
+        <option value="white">Hôte Blanc</option>
+      </select>
+      <label><input id="goRanked" type="checkbox" checked /> Classée</label>
+      <button id="btnApplyGoSetup" type="button">Appliquer setup</button>
+      <button id="btnUndoPass" type="button">Undo passes</button>
+      <button id="btnSgfImport" type="button">SGF ↑</button>
+      <input id="sgfFileInput" type="file" accept=".sgf,text/plain" style="display:none;" />
+      <button id="btnAutomatch" type="button">Automatch</button>
+      <label><input id="showCoords" type="checkbox" checked /> Coordonnées</label>
+      <label><input id="rengoCheck" type="checkbox" /> Rengo</label>
+    </div>
+    <label id="renchessWrap" style="display:none;"><input id="renchessCheck" type="checkbox" /> Renchess</label>
+    <label id="handBrainWrap" style="display:none;"><input id="handBrainCheck" type="checkbox" /> Main-tête</label>
+    <select id="chessVariant" title="Variante d'échecs" style="display:none;">
+      <option value="standard">Standard</option>
+      <option value="threeCheck">3 échecs</option>
+      <option value="kingOfTheHill">Roi de la colline</option>
+    </select>
+  </div>
+
+  <div id="teachingBanner" class="teaching-banner" style="display:none;"></div>
+  <div id="teachingPanel" class="teaching-panel teaching-compact" style="display:none;">
+    <div class="teaching-head teach-bar">
+      <div class="teach-status">
+        <strong>Teaching</strong>
+        <span id="teachingModeLabel">PARTIE</span>
+        <span id="teachingRoleLabel">—</span>
+      </div>
+      <div class="teaching-actions teach-primary">
+        <button type="button" id="btnTeachTake" class="primary">Take Control</button>
+        <button type="button" id="btnTeachResume">Resume Play</button>
+        <button type="button" id="btnTeachGive">→ Élève</button>
+        <button type="button" id="btnTeachTakeBack">← Prof</button>
+      </div>
+      <div class="teaching-nav teach-nav">
+        <button type="button" data-teach-nav="root" title="Début">⏮</button>
+        <button type="button" data-teach-nav="back" title="Précédent">◀</button>
+        <button type="button" data-teach-nav="fwd" title="Suivant">▶</button>
+        <button type="button" data-teach-nav="end" title="Fin">⏭</button>
+        <span id="teachingTreeStatus" class="review-status">—</span>
+      </div>
+    </div>
+    <p class="teach-flow-hint"><strong>Take Control</strong> pour expliquer → marques / variations → <strong>Resume Play</strong> pour reprendre. <kbd>T</kbd> / <kbd>R</kbd></p>
+
+    <div class="teaching-tools teach-tools-main" title="Outils (après Take Control)">
+      <button type="button" data-teach-tool="move" class="on" title="Jouer / variation">Coup</button>
+      <button type="button" data-teach-tool="triangle" title="Triangle">△</button>
+      <button type="button" data-teach-tool="square" title="Carré">□</button>
+      <button type="button" data-teach-tool="circle" title="Cercle">◯</button>
+      <button type="button" data-teach-tool="letter" title="Lettre">A</button>
+      <button type="button" data-teach-tool="number" title="Numéro">1</button>
+      <button type="button" data-teach-tool="arrow" title="Flèche (2 clics)">→</button>
+      <button type="button" data-teach-tool="dead" title="Mort (Shift = groupe)">☠</button>
+      <button type="button" data-teach-tool="erase" title="Gomme">⌫</button>
+      <button type="button" id="btnTeachClearMarks">Effacer</button>
+      <button type="button" id="btnTeachClearArrows">Flèches ⌫</button>
+      <button type="button" id="btnTeachExport">SGF ↓</button>
+    </div>
+    <div class="teaching-colors" id="teachColorBar" title="Couleur"></div>
+    <textarea id="teachingComment" rows="1" placeholder="Commentaire visible pour l'élève…"></textarea>
+
+    <details class="teach-more">
+      <summary>Plus d’outils (pierres libres, flèches, NAG…)</summary>
+      <div class="teaching-tools">
+        <button type="button" data-teach-tool="black">●</button>
+        <button type="button" data-teach-tool="white">○</button>
+        <button type="button" data-teach-tool="star">★</button>
+        <button type="button" data-teach-tool="cross">✕</button>
+        <button type="button" data-teach-tool="capture">◎</button>
+        <button type="button" data-teach-tool="good">● vert</button>
+        <button type="button" data-teach-tool="bad">● rouge</button>
+        <button type="button" data-teach-tool="hot">● orange</button>
+        <button type="button" data-teach-tool="draw">✏️</button>
+      </div>
+      <div class="teaching-arrow-styles">
+        <span>Flèche :</span>
+        <button type="button" data-arrow-style="move" class="on">Mouvement</button>
+        <button type="button" data-arrow-style="force">Force</button>
+        <button type="button" data-arrow-style="weak">Faible</button>
+      </div>
+      <div class="teaching-nags">
+        <button type="button" data-teach-nag="!">!</button>
+        <button type="button" data-teach-nag="?">?</button>
+        <button type="button" data-teach-nag="!!">!!</button>
+        <button type="button" data-teach-nag="??">??</button>
+        <button type="button" data-teach-nag="!?">!?</button>
+        <button type="button" data-teach-nag="?!">?!</button>
+        <button type="button" data-teach-nag="">∅</button>
+        <input type="text" id="teachVarLabel" maxlength="24" placeholder="Nom variation…" />
+        <button type="button" id="btnTeachVarLabel">OK</button>
+        <button type="button" id="btnTeachDeleteBranch">Suppr. branche</button>
+        <button type="button" id="btnTeachImportSgf">Import SGF</button>
+        <input type="file" id="teachSgfFile" accept=".sgf,text/*" style="display:none" />
+      </div>
+    </details>
+
+    <details class="teach-more">
+      <summary>Leçons / quiz / classroom</summary>
+      <div class="teaching-classroom-modes">
+        <button type="button" data-go-classroom="explain" class="on">📢 Expliquer</button>
+        <button type="button" data-go-classroom="try">🎯 Essayer</button>
+        <button type="button" data-go-classroom="play-from">⚫ Jouer depuis ici</button>
+      </div>
+      <div class="teaching-lessons">
+        <label>Leçon <select id="teachLessonSelect"><option value="">—</option></select></label>
+        <button type="button" id="btnTeachLoadLesson">Charger</button>
+        <label>Parcours <select id="teachPlanSelect"><option value="">—</option></select></label>
+        <button type="button" id="btnTeachLoadPlan">Parcours</button>
+        <button type="button" id="btnTeachPrevChapter">◀</button>
+        <button type="button" id="btnTeachNextChapter">▶</button>
+        <button type="button" id="btnTeachStartQuiz">Quiz</button>
+        <button type="button" id="btnTeachHint">Indice</button>
+        <button type="button" id="btnTeachReveal">Révéler</button>
+        <button type="button" id="btnTeachStopQuiz">Stop quiz</button>
+        <button type="button" id="btnTeachConceal">Guess-the-move</button>
+        <button type="button" id="btnTeachStopConceal">Stop guess</button>
+      </div>
+      <div class="teaching-pedago">
+        <label><input type="checkbox" id="chkTeachNumbers" /> Nº coups</label>
+        <label><input type="checkbox" id="chkTeachTerritory" /> Territoire</label>
+        <label><input type="checkbox" id="chkTeachLaser" /> Laser</label>
+        <button type="button" id="btnTeachClearDraw">Effacer dessin</button>
+        <button type="button" id="btnTeachBreak">Explorer</button>
+        <button type="button" id="btnTeachSync">Sync → prof</button>
+        <button type="button" id="btnTeachRaiseHand">✋ Main</button>
+        <button type="button" id="btnTeachLowerHand">Baisser</button>
+      </div>
+    </details>
+    <p id="teachHintBox" class="teaching-hint-box" style="display:none;"></p>
+  </div>
+    <div id="rengoSeatsPanel" class="rengo-seats" style="display:none;">
+      <strong>Rengo 4 joueurs — choisissez un siège</strong>
+      <div class="rengo-grid">
+        <button type="button" id="rengoClaim_b0">Noir A</button><span id="rengoSeat_b0">—</span>
+        <button type="button" id="rengoClaim_b1">Noir B</button><span id="rengoSeat_b1">—</span>
+        <button type="button" id="rengoClaim_w0">Blanc A</button><span id="rengoSeat_w0">—</span>
+        <button type="button" id="rengoClaim_w1">Blanc B</button><span id="rengoSeat_w1">—</span>
+      </div>
+    </div>
+    <div id="reviewPanel" class="review-panel" style="display:none;">
+      <strong>Review / Teaching</strong>
+      <div id="reviewStatus" class="review-status">—</div>
+      <div class="review-btns">
+        <button type="button" id="btnReviewRoot">⏮</button>
+        <button type="button" id="btnReviewBack">◀</button>
+        <button type="button" id="btnReviewFwd">▶</button>
+        <button type="button" id="btnReviewEnd">⏭</button>
+        <button type="button" id="btnReviewBranch">Branche</button>
+        <button type="button" id="btnReviewExport">SGF var.</button>
+        <button type="button" id="btnReviewExit">Fermer</button>
+      </div>
+      <textarea id="reviewComment" rows="2" placeholder="Commentaire sur ce nœud…"></textarea>
+    </div>
+  <div id="gameChat" class="game-chat" style="display:none;">
+    <div id="gameChatLog" class="game-chat-log"></div>
+    <div class="game-chat-row">
+      <input id="gameChatInput" type="text" maxlength="400" placeholder="Chat partie…" />
+      <button id="gameChatSend" type="button">Envoyer</button>
+    </div>
+  </div>
+  
+  <!-- Modal de configuration d'horloge -->
+  <div id="clockModal" class="modal" style="display:none;">
+    <div class="modal-content clock-modal-content">
+      <h3>⏱️ Horloge Go</h3>
+      <p id="goClockHint" class="go-clock-hint">Presets rapides (un clic) ou réglage manuel ci-dessous.</p>
+
+      <div class="clock-disable">
+        <button id="btnDisableClock" type="button" class="danger">∞ Sans horloge</button>
+      </div>
+
+      <div class="clock-presets go-clock-presets">
+        <div class="clock-cat">
+          <h4>⚡ Bullet</h4>
+          <div class="preset-grid go-clock-grid">
+            <button class="preset-btn go-preset go-clock-card" data-preset="go-bullet1"><strong>Bullet 1+5×10</strong><span>Très rapide</span></button>
+            <button class="preset-btn go-preset go-clock-card" data-preset="go-bullet3"><strong>Bullet 3+3×20</strong><span>Court</span></button>
+          </div>
+        </div>
+        <div class="clock-cat">
+          <h4>🔥 Blitz</h4>
+          <div class="preset-grid go-clock-grid">
+            <button class="preset-btn go-preset go-clock-card" data-preset="go-blitz5"><strong>Blitz 5+3×20</strong><span>Partie vive</span></button>
+            <button class="preset-btn go-preset go-clock-card" data-preset="go-blitz5abs"><strong>Blitz 5+0</strong><span>Absolute 5 min</span></button>
+          </div>
+        </div>
+        <div class="clock-cat">
+          <h4>⏱️ Rapide</h4>
+          <div class="preset-grid go-clock-grid">
+            <button class="preset-btn go-preset go-clock-card preferred" data-preset="go-rapid10"><strong>Rapide 10+3×30</strong><span>Recommandé</span></button>
+            <button class="preset-btn go-preset go-clock-card" data-preset="go-rapid15"><strong>Rapide 15+5×30</strong><span>Byoyomi</span></button>
+          </div>
+        </div>
+        <div class="clock-cat">
+          <h4>🏛️ Classique</h4>
+          <div class="preset-grid go-clock-grid">
+            <button class="preset-btn go-preset go-clock-card preferred" data-preset="go-classical20"><strong>Classique 20+5×30</strong><span>Standard</span></button>
+            <button class="preset-btn go-preset go-clock-card" data-preset="go-classical30"><strong>Classique 30+5×30</strong><span>Plus long</span></button>
+            <button class="preset-btn go-preset go-clock-card" data-preset="go-classical45"><strong>Classique 45+5×60</strong><span>Longue</span></button>
+          </div>
+        </div>
+        <div class="clock-cat">
+          <h4>Autres</h4>
+          <div class="preset-grid go-clock-grid">
+            <button class="preset-btn go-preset go-clock-card" data-preset="go-abs20"><strong>Absolute 20</strong><span>20 min tout compris</span></button>
+            <button class="preset-btn go-preset go-clock-card" data-preset="go-abs60"><strong>Absolute 60</strong><span>1 heure</span></button>
+            <button class="preset-btn go-preset go-clock-card" data-preset="go-canadian"><strong>Canadien 30+5/25</strong><span>5 min / 25 coups</span></button>
+            <button class="preset-btn go-preset go-clock-card" data-preset="go-none"><strong>∞ Libre</strong><span>Sans limite</span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider" id="clockCustomDivider">OU personnaliser</div>
+
+      <div id="clockAdvancedWrap" class="clock-advanced clock-custom-block">
+        <div class="clock-config">
+          <label>Type d'horloge :</label>
+          <select id="clockType">
+            <option value="none">∞ Aucune</option>
+            <option value="simple">⏱️ Absolute (temps fixe)</option>
+            <option value="fischer">⚡ Fischer (incrément)</option>
+            <option value="byoyomi" selected>🎯 Byoyomi</option>
+            <option value="canadian">🍁 Canadienne</option>
+          </select>
+          <div id="clockConfigSimple" class="clock-inputs">
+            <div class="input-group">
+              <label>Minutes par joueur :</label>
+              <input type="number" id="simpleMinutes" value="20" min="0.5" max="180" step="0.5" />
+            </div>
+          </div>
+          <div id="clockConfigFischer" class="clock-inputs" style="display:none;">
+            <div class="input-group">
+              <label>Minutes :</label>
+              <input type="number" id="fischerMinutes" value="10" min="0.5" max="180" step="0.5" />
+            </div>
+            <div class="input-group">
+              <label>Incrément (s) :</label>
+              <input type="number" id="fischerIncrement" value="5" min="0" max="60" step="1" />
+            </div>
+          </div>
+          <div id="clockConfigByoyomi" class="clock-inputs">
+            <div class="input-group">
+              <label>Temps principal (min) :</label>
+              <input type="number" id="byoyomiMain" value="20" min="0" max="180" step="1" />
+            </div>
+            <div class="input-group">
+              <label>Byoyomi (s) :</label>
+              <input type="number" id="byoyomiTime" value="30" min="5" max="300" step="5" />
+            </div>
+            <div class="input-group">
+              <label>Périodes :</label>
+              <input type="number" id="byoyomiPeriods" value="5" min="1" max="10" step="1" />
+            </div>
+          </div>
+          <div id="clockConfigCanadian" class="clock-inputs" style="display:none;">
+            <div class="input-group">
+              <label>Temps principal (min) :</label>
+              <input type="number" id="canadianMain" value="30" min="0" max="180" step="1" />
+            </div>
+            <div class="input-group">
+              <label>Période (min) :</label>
+              <input type="number" id="canadianPeriod" value="5" min="1" max="60" step="1" />
+            </div>
+            <div class="input-group">
+              <label>Coups par période :</label>
+              <input type="number" id="canadianStones" value="25" min="5" max="50" step="5" />
+            </div>
+          </div>
+          <div class="modal-buttons">
+            <button id="btnClockOk" type="button" class="primary">✓ Appliquer</button>
+            <button id="btnClockCancel" type="button">Fermer</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div id="pairsPanel" class="pairs-panel" style="display:none;">
+    <h4 id="pairsTitle">Mode binôme</h4>
+    <div class="pairs-grid">
+      <div class="pairs-seat" data-side="w" data-seat="0">
+        <label for="pairWA" id="labelWA">⚪ Équipe claire — A / Tête</label>
+        <input id="pairWA" type="text" maxlength="20" value="Blanc A" />
+      </div>
+      <div class="pairs-seat" data-side="w" data-seat="1">
+        <label for="pairWB" id="labelWB">⚪ Équipe claire — B / Main</label>
+        <input id="pairWB" type="text" maxlength="20" value="Blanc B" />
+      </div>
+      <div class="pairs-seat" data-side="b" data-seat="0">
+        <label for="pairBA" id="labelBA">⚫ Équipe sombre — A / Tête</label>
+        <input id="pairBA" type="text" maxlength="20" value="Noir A" />
+      </div>
+      <div class="pairs-seat" data-side="b" data-seat="1">
+        <label for="pairBB" id="labelBB">⚫ Équipe sombre — B / Main</label>
+        <input id="pairBB" type="text" maxlength="20" value="Noir B" />
+      </div>
+    </div>
+    <p class="pairs-hint" id="pairsHint">Règle : les deux partenaires d’une couleur jouent à tour de rôle. On ne joue pas deux fois de suite pour son équipe.</p>
+    <p id="pairsNow" class="pairs-now"></p>
+    <div id="handBrainPanel" class="hand-brain-panel" style="display:none;">
+      <div class="hb-card hb-tete">
+        <div class="hb-role">🧠 Tête — <span id="hbTeteName">Blanc A</span></div>
+        <p class="hb-caption" id="hbTeteCaption">Choisissez le type de pièce à jouer :</p>
+        <div class="hb-pieces" id="hbPieceButtons"></div>
+      </div>
+      <div class="hb-card hb-main">
+        <div class="hb-role">✋ Main — <span id="hbMainName">Blanc B</span></div>
+        <p class="hb-caption">Indication reçue :</p>
+        <div id="hbHintDisplay" class="hb-hint">En attente du choix de la tête…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Compteurs de captures pour Go -->
+  <div id="captureCounters" style="display:none;"></div>
+
+  <!-- Horloges de jeu -->
+  <div id="clockDisplay" class="clock-container" style="display:none;">
+    <div class="clock-player clock-white" id="clockWhite">
+      <div class="clock-label">⚪ Blanc</div>
+      <div class="clock-time">--:--</div>
+      <div class="clock-extra"></div>
+    </div>
+    <div class="clock-player clock-black" id="clockBlack">
+      <div class="clock-label">⚫ Noir</div>
+      <div class="clock-time">--:--</div>
+      <div class="clock-extra"></div>
+    </div>
+  </div>
+
+  <div class="board-container">
+    <div id="board" role="grid" aria-label="Plateau de jeu"></div>
+    <div id="goBoardActions" class="board-actions" aria-label="Actions de partie">
+      <button id="btnPass" type="button" class="primary board-action-pass" title="Passer son tour (deux passes = fin de partie)">Passer</button>
+      <button id="btnAnalyze" type="button" title="Estimer le score / revue">Analyser</button>
+      <button id="btnScore" type="button" title="Mode comptage (après double-pass)">Compter</button>
+      <button id="btnScoreDone" type="button" title="Valider le score">Done</button>
+    </div>
+    <div id="moduleDock" class="module-dock" hidden></div>
+    <div id="variantHud" class="variant-hud" style="display:none;"></div>
+    <div id="analysisPanel" class="analysis-panel" style="display:none;">
+      <div class="analysis-header">
+        <strong id="analysisTitle">Analyse</strong>
+        <button type="button" id="btnCloseAnalysis" class="analysis-close">✕</button>
+      </div>
+      <pre id="analysisBody" class="analysis-body"></pre>
+    </div>
+    <div id="status" class="status">Prêt à jouer</div>
+  </div>
+
+  <!-- Panneau de commentaires Discord -->
+  <div id="commentaryPanel" class="commentary-panel" style="display:none;">
+    <div class="commentary-header">
+      <h3>💬 Commentaires Live</h3>
+      <button id="btnToggleCommentary" type="button" class="btn-toggle-commentary">−</button>
+    </div>
+    <div class="commentary-content">
+      <div id="commentaryList" class="commentary-list">
+        <!-- Les commentaires apparaîtront ici -->
+      </div>
+      <div class="commentary-input">
+        <input type="text" id="commentaryInput" placeholder="Ajoutez un commentaire..." maxlength="500" />
+        <button id="btnSendComment" type="button">📤 Envoyer</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Modal de promotion -->
+  <div id="promotionModal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <h3>Choisir la promotion</h3>
+      <div class="promotion-choices">
+        <button class="promo-btn" data-piece="q"><img src="images/pieces/wQ.svg" class="promo-piece" alt="Dame"><br/>Dame</button>
+        <button class="promo-btn" data-piece="r"><img src="images/pieces/wR.svg" class="promo-piece" alt="Tour"><br/>Tour</button>
+        <button class="promo-btn" data-piece="b"><img src="images/pieces/wB.svg" class="promo-piece" alt="Fou"><br/>Fou</button>
+        <button class="promo-btn" data-piece="n"><img src="images/pieces/wN.svg" class="promo-piece" alt="Cavalier"><br/>Cavalier</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Indicateur de plateforme (debug) -->
+  <div id="platformIndicator" style="position:fixed;bottom:10px;right:10px;background:rgba(0,0,0,0.7);padding:8px 12px;border-radius:6px;font-size:11px;color:#aaa;z-index:9999;">
+    <a href="platform-status.html" style="color:#4a9eff;text-decoration:none;">📊 Status</a>
+  </div>
+
+  <section class="platforms">
+    <h2>Inviter un ami</h2>
+    <div class="connection">
+      <button id="btnInvite" type="button">✉️ Créer une invitation</button>
+      <input id="inviteUrl" type="text" readonly placeholder="Le lien d'invitation apparaîtra ici" />
+      <button id="btnCopy" type="button">📋 Copier</button>
+    </div>
+    <div class="platform-buttons">
+      <button id="btnShareFacebook" type="button">📘 Facebook</button>
+      <button id="btnShareTwitter" type="button">🐦 Twitter</button>
+      <button id="btnShareTelegram" type="button">✈️ Telegram</button>
+      <button id="btnShareReddit" type="button">🤖 Reddit</button>
+      <button id="btnShareWhatsApp" type="button">💬 WhatsApp</button>
+    </div>
+  </section>
+
+  <!-- Modal de connexion -->
+  <div id="loginModal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <h3>Connexion / Inscription</h3>
+      <div class="login-tabs">
+        <button class="login-tab active" data-tab="username">Pseudo</button>
+        <button class="login-tab" data-tab="email">Email</button>
+        <button class="login-tab" data-tab="social">Réseau Social</button>
+      </div>
+      
+      <div class="login-content">
+        <div id="loginUsername" class="login-panel">
+          <input type="text" id="inputUsername" placeholder="Votre pseudo" maxlength="20" />
+          <button id="btnLoginUsername" type="button">Se connecter</button>
+        </div>
+        
+        <div id="loginEmail" class="login-panel" style="display:none;">
+          <p style="color:#aaa;margin-bottom:10px;font-size:13px;">Réservé si un service mail est branché sur le serveur. Sinon, utilisez un pseudo.</p>
+          <input type="email" id="inputEmail" placeholder="Votre email" />
+          <button id="btnLoginEmail" type="button">Demander un lien</button>
+        </div>
+        
+        <div id="loginSocial" class="login-panel" style="display:none;">
+          <p style="color:#aaa;margin-bottom:15px;">Identité plateforme (si l’app est ouverte depuis le réseau) :</p>
+          <button id="btnLoginFacebook" type="button" class="social-login-btn facebook">📘 Facebook</button>
+          <button id="btnLoginDiscord" type="button" class="social-login-btn discord">💬 Discord</button>
+          <button id="btnLoginTelegram" type="button" class="social-login-btn telegram">✈️ Telegram</button>
+          <p class="login-social-note" style="color:#777;font-size:12px;margin-top:15px;">Configurez .env ou ouvrez l’app depuis la plateforme.</p>
+        </div>
+      </div>
+      
+      <button id="btnCloseLogin" type="button" style="margin-top:15px;">Annuler</button>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/security.js"></script>
+  <script src="vendor/peerjs.min.js"></script>
+  <script src="js/net.js"></script>
+  <script src="js/net-local.js?v=7"></script>
+  <script src="js/rooms.js?v=7"></script>
+  <script src="js/platforms.js"></script>
+  <!-- Modal d'invitation reçue -->
+  <div id="invitationModal" class="modal" style="display:none;">
+    <div class="modal-content invitation-modal">
+      <h3>📨 Invitation reçue</h3>
+      <div id="invitationContent" class="invitation-content">
+        <!-- Le contenu sera injecté dynamiquement -->
+      </div>
+      <div class="invitation-actions">
+        <button id="btnAcceptInvite" type="button" class="btn-accept">✓ Accepter</button>
+        <button id="btnCounterInvite" type="button" class="btn-counter">⚙️ Proposer autre timing</button>
+        <button id="btnRejectInvite" type="button" class="btn-reject">✕ Refuser</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de contre-proposition -->
+  <div id="counterModal" class="modal" style="display:none;">
+    <div class="modal-content counter-modal">
+      <h3>⚙️ Proposer un autre timing</h3>
+      <p id="counterInfo" style="color:#aaa;margin-bottom:15px;"></p>
+      <div class="counter-presets">
+        <button class="counter-preset-btn" data-preset="bullet1">⚡ Bullet 1+0</button>
+        <button class="counter-preset-btn" data-preset="blitz5">🔥 Blitz 5+0</button>
+        <button class="counter-preset-btn" data-preset="rapid10">⚡ Rapide 10+0</button>
+        <button class="counter-preset-btn" data-preset="rapid15">⚡ Rapide 15+10</button>
+        <button class="counter-preset-btn" data-preset="classical30">🏛️ Classique 30+0</button>
+      </div>
+      <div class="modal-buttons">
+        <button id="btnSendCounter" type="button">✓ Envoyer la proposition</button>
+        <button id="btnCancelCounter" type="button">✕ Annuler</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification d'invitation acceptée/contre-proposée -->
+  <div id="inviteNotification" class="invite-notification" style="display:none;">
+    <div class="notification-content">
+      <span id="notificationText"></span>
+      <button id="btnCloseNotif" class="close-notif">✕</button>
+    </div>
+  </div>
+
+  <!-- Panneau de Configuration Stream -->
+  <div id="streamConfigPanel" class="stream-config-panel" style="display:none;">
+    <div class="config-panel-content">
+      <div class="config-panel-header">
+        <h2>🎨 Configuration du Stream</h2>
+        <button type="button" id="btnCloseStreamConfig" class="widget-close">✕</button>
+      </div>
+      
+      <!-- Layouts prédéfinis -->
+      <div class="config-section">
+        <h3>📐 Layouts Prédéfinis</h3>
+        <div class="layout-presets">
+          <button type="button" class="layout-preset-btn active" data-layout="default">
+            <div class="layout-preset-icon">🎮</div>
+            <div>Par Défaut</div>
+          </button>
+          <button type="button" class="layout-preset-btn" data-layout="minimal">
+            <div class="layout-preset-icon">⚡</div>
+            <div>Minimal</div>
+          </button>
+          <button type="button" class="layout-preset-btn" data-layout="commentator">
+            <div class="layout-preset-icon">🎙️</div>
+            <div>Commentateur</div>
+          </button>
+          <button type="button" class="layout-preset-btn" data-layout="tournament">
+            <div class="layout-preset-icon">🏆</div>
+            <div>Tournoi</div>
+          </button>
+          <button type="button" class="layout-preset-btn" data-layout="analysis">
+            <div class="layout-preset-icon">📊</div>
+            <div>Analyse</div>
+          </button>
+          <button type="button" class="layout-preset-btn" data-layout="complete">
+            <div class="layout-preset-icon">🌟</div>
+            <div>Complet</div>
+          </button>
+        </div>
+      </div>
+      
+      <!-- Widgets -->
+      <div class="config-section">
+        <h3>🧩 Widgets</h3>
+        <div class="config-grid">
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="widget-playerInfo-enabled" checked>
+              👥 Joueurs
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="widget-clock-enabled" checked>
+              ⏱️ Horloges
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="widget-evaluation-enabled" checked>
+              📊 Évaluation
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="widget-moveList-enabled" checked>
+              📝 Liste coups
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="widget-capturedPieces-enabled" checked>
+              💀 Captures
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="widget-lastMove-enabled" checked>
+              🎯 Dernier coup
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="widget-streamInfo-enabled" checked>
+              📺 Info Stream
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="widget-webcam-enabled">
+              📷 Webcam
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="widget-chat-enabled">
+              💬 Chat
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="widget-logo-enabled" checked>
+              🎮 Logo
+            </label>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Options d'affichage du plateau -->
+      <div class="config-section">
+        <h3>🎨 Affichage du Plateau</h3>
+        <div class="config-grid">
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="board-showCoordinates" checked>
+              Afficher coordonnées
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="board-showLastMove" checked>
+              Afficher dernier coup
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="board-showLegalMoves" checked>
+              Afficher coups légaux
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="board-highlightCheck" checked>
+              Surligner échec
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="board-showEvalBar" checked>
+              Barre d'évaluation
+            </label>
+          </div>
+          <div class="config-item">
+            <label>
+              <input type="checkbox" id="board-showBestMove">
+              Afficher meilleur coup
+            </label>
+          </div>
+          <div class="config-item">
+            <label for="board-pieceStyle">Style des pièces</label>
+            <select id="board-pieceStyle">
+              <option value="classic" selected>Classique</option>
+              <option value="wikipedia">Wikipedia</option>
+              <option value="alpha">Alpha</option>
+            </select>
+          </div>
+          <div class="config-item">
+            <label for="board-boardTheme">Thème du plateau</label>
+            <select id="board-boardTheme">
+              <option value="green" selected>Vert</option>
+              <option value="blue">Bleu</option>
+              <option value="brown">Brun</option>
+              <option value="gray">Gris</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Informations Streamer -->
+      <div class="config-section">
+        <h3>👤 Informations Streamer</h3>
+        <div class="config-grid">
+          <div class="config-item">
+            <label for="streamer-name">Nom du streamer</label>
+            <input type="text" id="streamer-name" placeholder="Votre pseudo">
+          </div>
+          <div class="config-item">
+            <label for="streamer-title">Titre</label>
+            <input type="text" id="streamer-title" placeholder="GM, MI, FM...">
+          </div>
+          <div class="config-item">
+            <label for="streamer-twitch">Twitch</label>
+            <input type="text" id="streamer-twitch" placeholder="@pseudo">
+          </div>
+          <div class="config-item">
+            <label for="streamer-youtube">YouTube</label>
+            <input type="text" id="streamer-youtube" placeholder="@pseudo">
+          </div>
+          <div class="config-item">
+            <label for="streamer-twitter">Twitter/X</label>
+            <input type="text" id="streamer-twitter" placeholder="@pseudo">
+          </div>
+        </div>
+      </div>
+      
+      <!-- Actions -->
+      <div class="config-actions">
+        <button type="button" class="btn-primary" id="btnApplyStreamConfig">
+          ✓ Appliquer & Fermer
+        </button>
+        <button type="button" class="btn-secondary" id="btnPreviewStream">
+          👁️ Prévisualiser
+        </button>
+        <button type="button" class="btn-secondary" id="btnExportStreamConfig">
+          📥 Exporter Config
+        </button>
+        <button type="button" class="btn-secondary">
+          <label for="importConfig" style="cursor: pointer; margin: 0;">
+            📤 Importer Config
+            <input type="file" id="importConfig" accept=".json" style="display: none;">
+          </label>
+        </button>
+        <button type="button" class="btn-danger" id="btnResetStreamConfig">
+          🔄 Réinitialiser
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Contrôles Discord (masqués par défaut, affichés si Discord détecté) -->
+  <div id="discordControls" class="stream-control-bar" style="display: none;">
+    <button type="button" class="stream-control-btn btn-start-stream" id="btnStartDiscordMatch">
+      ▶️ Partie Discord
+    </button>
+    <button type="button" class="stream-control-btn btn-secondary" id="btnDiscordInvite" style="display:none;">
+      ✉️ Inviter sur Discord
+    </button>
+    <button type="button" class="stream-control-btn btn-start-stream" id="btnStartDiscordStream">
+      🔴 Broadcast
+    </button>
+    <button type="button" class="stream-control-btn btn-config-stream" id="btnDiscordStreamConfig">
+      ⚙️ Overlay
+    </button>
+    <button type="button" class="stream-control-btn btn-secondary" id="btnCopyStreamUrl">
+      📋 Watch
+    </button>
+    <span id="discordParticipants" style="color:#9ec1ff;font-size:12px;">Discord</span>
+    <span id="discordMatchStatus" style="color:#b7c4e0;font-size:12px;"></span>
+    <span id="spectatorCount" style="color: #4a9eff; font-weight: 600;">0 👁️</span>
+  </div>
+
+  <div class="broadcast-toolbar" id="broadcastToolbar">
+    <button type="button" id="btnBroadcast" class="primary">📺 Broadcast / OBS</button>
+    <button type="button" id="btnObsLink" title="URL Browser Source OBS">Lien OBS</button>
+    <button type="button" id="btnWatchLink" title="Lien spectateur">Lien Watch</button>
+    <button type="button" id="btnLessonRecord">⏺ Timeline leçon</button>
+    <button type="button" id="btnWebcamToggle">📷 Webcam</button>
+  </div>
+  <script src="js/move-broadcast-toolbar.js?v=1"></script>
+
+  <script src="js/sounds.js?v=18"></script>
+  <script src="js/rating.js?v=10"></script>
+  <script src="js/clock.js?v=10"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/login-ui.js"></script>
+  <script src="js/invitation.js"></script>
+  <script src="js/analysis.js?v=9"></script>
+  <script src="js/match.js?v=11"></script>
+  <script src="js/katago.js?v=11"></script>
+  <script src="js/go-features.js?v=11"></script>
+  <script src="js/review-tree.js?v=15"></script>
+  <script src="js/review-ui.js?v=11"></script>
+  <script src="js/teaching-lessons.js?v=15"></script>
+  <script src="js/teaching-marks.js?v=14"></script>
+  <script src="js/teaching-session.js?v=15"></script>
+  <script src="js/teaching-ui.js?v=15"></script>
+  <script src="js/rengo-net.js?v=11"></script>
+  <script src="js/automatch.js?v=11"></script>
+  <script src="vendor/discord-embedded-app-sdk.js?v=4"></script>
+  <script src="js/discord-mock.js?v=4"></script>
+  <script src="js/discord-activity.js?v=4"></script>
+  <script src="js/discord-match.js?v=8"></script>
+  <script src="js/discord-integration.js?v=5"></script>
+  <script src="js/stream-overlay.js?v=2"></script>
+  <script src="js/broadcast.js?v=2"></script>
+  <script src="js/ux-chrome.js?v=2"></script>
+  <script src="shared/js/bridge.js"></script>
+  <script type="module" src="js/app.js?v=25"></script>
+</body>
+</html>

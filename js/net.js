@@ -13,10 +13,12 @@ class Net {
       ? new NetworkSecurity()
       : null;
     this.roomToken = null;
-    this.role = null;
+    this.role = null; // host | guest | observer
     this.authenticated = false;
     this.handshakeTimer = null;
     this.pendingHostId = null;
+    this.observers = [];
+    this.onObserver = null;
   }
 
   generateToken() {
@@ -61,7 +63,10 @@ class Net {
       this.authenticated = false;
     }
 
-    const config = window.CONFIG?.peerjs || {};
+    const config = window.CONFIG && typeof window.CONFIG.peerOptions === 'function'
+      ? window.CONFIG.peerOptions()
+      : (window.CONFIG?.peerjs || {});
+    // PeerJS : options en 1er argument si pas d'id imposé
     this.peer = new Peer(config);
 
     this.peer.on('open', (id) => {
@@ -83,9 +88,9 @@ class Net {
         conn.close();
         return;
       }
+      // 1re connexion = adversaire ; suivantes = observateurs lecture seule
       if (this.conn && this.conn.open) {
-        console.warn('Connexion P2P supplémentaire refusée');
-        conn.close();
+        this._attachObserver(conn);
         return;
       }
       this.authenticated = false;
@@ -158,13 +163,51 @@ class Net {
     });
   }
 
+  _attachObserver(conn) {
+    const obs = { conn: conn, authenticated: false };
+    this.observers.push(obs);
+    conn.on('data', (data) => {
+      try {
+        if (data && data.type === 'hello' && this.tokensEqual(data.token, this.roomToken)) {
+          obs.authenticated = true;
+          conn.send({ type: 'hello-ok', role: 'observer' });
+          if (this.onObserver) this.onObserver({ joined: true, count: this.observerCount() });
+          if (this.onStatus) this.onStatus('Observateur connecté (' + this.observerCount() + ')', 'ok');
+          return;
+        }
+        // Observateurs : chat seulement
+        if (obs.authenticated && data && data.type === 'game-chat' && this.onMessage) {
+          this.onMessage(data);
+          this.broadcast(data, conn);
+        }
+      } catch (_) { /* ignore */ }
+    });
+    conn.on('close', () => {
+      this.observers = this.observers.filter((o) => o.conn !== conn);
+      if (this.onObserver) this.onObserver({ joined: false, count: this.observerCount() });
+    });
+  }
+
+  observerCount() {
+    return this.observers.filter((o) => o.conn && o.conn.open).length;
+  }
+
+  broadcast(data, exceptConn) {
+    this.send(data);
+    this.observers.forEach((o) => {
+      if (!o.authenticated || !o.conn || !o.conn.open) return;
+      if (exceptConn && o.conn === exceptConn) return;
+      try { o.conn.send(data); } catch (_) { /* ignore */ }
+    });
+  }
+
   acceptHandshakeOrDrop(data) {
     if (data.type === 'hello') {
       if (this.role !== 'host') return false;
       if (this.tokensEqual(data.token, this.roomToken)) {
         this.authenticated = true;
         this.clearHandshakeTimeout();
-        this.send({ type: 'hello-ok' });
+        this.send({ type: 'hello-ok', role: 'guest' });
         if (this.onStatus) this.onStatus('Adversaire authentifié', 'ok');
       } else {
         this.authenticated = false;
@@ -176,10 +219,13 @@ class Net {
     }
 
     if (data.type === 'hello-ok') {
-      if (this.role === 'guest') {
+      if (this.role === 'guest' || this.role === 'observer') {
         this.authenticated = true;
         this.clearHandshakeTimeout();
-        if (this.onStatus) this.onStatus("Connecté à l'hôte !", 'ok');
+        if (data.role === 'observer') this.role = 'observer';
+        if (this.onStatus) {
+          this.onStatus(this.role === 'observer' ? 'Mode observateur' : "Connecté à l'hôte !", 'ok');
+        }
       }
       return false;
     }
@@ -191,7 +237,8 @@ class Net {
     return typeof hostId === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(hostId);
   }
 
-  join(hostId, token) {
+  join(hostId, token, opts) {
+    opts = opts || {};
     if (!this.isValidHostId(hostId)) {
       if (this.onStatus) this.onStatus('ID de salle invalide', 'err');
       return;
@@ -201,7 +248,7 @@ class Net {
       return;
     }
 
-    this.role = 'guest';
+    this.role = opts.observe ? 'observer' : 'guest';
     this.roomToken = token;
     this.authenticated = false;
 
@@ -221,7 +268,7 @@ class Net {
 
     this.conn.on('open', () => {
       this.joinAttempts = 0;
-      this.send({ type: 'hello', token: this.roomToken });
+      this.send({ type: 'hello', token: this.roomToken, observe: this.role === 'observer' });
       this.startHandshakeTimeout();
     });
   }
@@ -233,11 +280,24 @@ class Net {
       console.warn('Envoi bloqué: handshake incomplet');
       return;
     }
+    // Observateur : seulement chat
+    if (this.role === 'observer' && data && data.type !== 'game-chat' && !isHandshake) {
+      console.warn('Observateur : envoi non autorisé', data.type);
+      return;
+    }
     try {
       const payload = this.netSecurity
         ? this.netSecurity.validateMessage(data, { rateLimit: false })
         : data;
       this.conn.send(payload);
+      // Hôte : relayer aux observateurs
+      if (this.role === 'host' && !isHandshake) {
+        this.observers.forEach((o) => {
+          if (o.authenticated && o.conn && o.conn.open) {
+            try { o.conn.send(payload); } catch (_) { /* ignore */ }
+          }
+        });
+      }
     } catch (error) {
       console.warn('Envoi réseau bloqué:', error.message);
     }
